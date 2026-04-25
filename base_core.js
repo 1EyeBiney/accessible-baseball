@@ -1,4 +1,4 @@
-/* base_core.js - v1.1.0 */
+/* base_core.js - v1.4.4 */
 
 // S2: BASE namespace. Owns boot sequence, focus management, ARIA announcer,
 // visual buffer updater, and the pitch/result event callbacks that tie all
@@ -7,17 +7,21 @@
 BASE.core = {
 
     // ── DOM Refs ──────────────────────────────────────────────────────────────
-    _liveRegion:   null,
-    _visualBuffer: null,
-    _terminal:     null,
-    _bootScreen:   null,
+    _liveRegion:        null,
+    _visualBuffer:      null,
+    _terminal:          null,
+    _bootScreen:        null,
+    _telemetryPanel:    null, // v1.4.4
+    _telemetryTextarea: null, // v1.4.4
 
     // ── Init ──────────────────────────────────────────────────────────────────
     init() {
-        BASE.core._liveRegion   = document.getElementById('live-region');
-        BASE.core._visualBuffer = document.getElementById('visual-buffer');
-        BASE.core._terminal     = document.getElementById('game-terminal');
-        BASE.core._bootScreen   = document.getElementById('boot-screen');
+        BASE.core._liveRegion        = document.getElementById('live-region');
+        BASE.core._visualBuffer      = document.getElementById('visual-buffer');
+        BASE.core._terminal          = document.getElementById('game-terminal');
+        BASE.core._bootScreen        = document.getElementById('boot-screen');
+        BASE.core._telemetryPanel    = document.getElementById('telemetry-panel');     // v1.4.4
+        BASE.core._telemetryTextarea = document.getElementById('telemetry-textarea');  // v1.4.4
 
         const btnInit = document.getElementById('btn-init');
         if (btnInit) {
@@ -29,6 +33,10 @@ BASE.core = {
                 }
             });
         }
+
+        // v1.4.4: Telemetry panel button wiring
+        document.getElementById('telemetry-download')?.addEventListener('click', BASE.core._downloadTelemetry);
+        document.getElementById('telemetry-close')?.addEventListener('click', BASE.core.hideTelemetry);
     },
 
     // ── Boot Sequence ─────────────────────────────────────────────────────────
@@ -77,7 +85,54 @@ BASE.core = {
         if (!el) return;
         el.textContent = text;
     },
+    // ── Telemetry Dump Panel (v1.4.3) ────────────────────────────────────────
+    // Renders the derby history into a real, focusable textarea so the user
+    // can select-all + copy reliably (the navigator.clipboard path was failing
+    // silently in some screen-reader / browser combos because focus was on a
+    // non-editable element). Also auto-selects the contents and offers a .txt
+    // download as a guaranteed fallback.
+    showTelemetry(text) {
+        const panel = BASE.core._telemetryPanel;
+        const ta    = BASE.core._telemetryTextarea;
+        if (!panel || !ta) return;
 
+        ta.value = text;
+        panel.style.display = 'flex';
+        // Defer focus + select to next tick so display-change settles.
+        setTimeout(() => {
+            ta.focus();
+            ta.select();
+        }, 0);
+    },
+
+    hideTelemetry() {
+        const panel = BASE.core._telemetryPanel;
+        if (!panel) return;
+        panel.style.display = 'none';
+        if (BASE.core._terminal) BASE.core._terminal.focus();
+    },
+
+    isTelemetryOpen() {
+        const panel = BASE.core._telemetryPanel;
+        return !!(panel && panel.style.display !== 'none' && panel.style.display !== '');
+    },
+
+    _downloadTelemetry() {
+        const ta = BASE.core._telemetryTextarea;
+        if (!ta) return;
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const blob  = new Blob([ta.value], { type: 'text/plain' });
+        const url   = URL.createObjectURL(blob);
+        const a     = document.createElement('a');
+        a.href     = url;
+        a.download = `derby-telemetry-${stamp}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Revoke after a short delay so the download has time to start.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        BASE.core.announce('Telemetry file downloaded.');
+    },
     // ── Initiate Pitch (called from base_input.js on Spacebar) ───────────────
     onInitiatePitch() {
         if (BASE.state.current === BASE.state.STATES.DERBY_SETUP ||
@@ -138,6 +193,8 @@ BASE.core = {
             resultText = 'Foul ball.';
         } else if (quality === 'miss') {
             resultText = 'Swing and a miss.';
+        } else if (quality === 'early_swing') {
+            resultText = 'Strike. Swung before the pitch was released.';
         } else {
             resultText = 'Called strike.';
         }
@@ -187,6 +244,7 @@ BASE.core = {
         BASE.state.derby.homers           = 0;
         BASE.state.derby.hits             = 0;
         BASE.state.derby.outs             = 0;
+        BASE.state.derby.history          = []; // v1.4.0: clear pitch log for new round
         BASE.state.setState(BASE.state.STATES.BATTER_UP);
         BASE.core.announce('New derby. Press Spacebar to call for the pitch.');
         BASE.core.updateBuffer('DERBY RESET — Press Space to pitch.');

@@ -1,4 +1,4 @@
-/* base_physics.js - v1.3.1 */
+/* base_physics.js - v1.4.0 */
 
 // S2: BASE namespace. Owns pitch trajectory math, contact quality resolution,
 // the pitch loop (including plate sync cue), and the "miss to Zone 5" command check.
@@ -204,6 +204,7 @@ BASE.physics = {
             BASE.audio.playTopped();
             BASE.core.announce(`Foul. Clipped it. ${offsetLabel}.`);
             BASE.core.updateBuffer(`FOUL | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | OFFSET: ${Math.round(offsetMs)}ms`);
+            BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Offset ${Math.round(offsetMs)}ms. Result: foul.`);
             BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
             BASE.core.onPitchResult({ quality: 'foul', distance: 0, zone: actualZone });
             return;
@@ -215,6 +216,7 @@ BASE.physics = {
             BASE.audio.playCatcherMitt();
             BASE.core.announce(`Swing and a miss. Wrong zone. ${offsetLabel}.`);
             BASE.core.updateBuffer(`MISS | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | OFFSET: ${Math.round(offsetMs)}ms`);
+            BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Offset ${Math.round(offsetMs)}ms. Result: miss.`);
             BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
             BASE.core.onPitchResult({ quality: 'miss', distance: 0, zone: actualZone });
             return;
@@ -264,28 +266,32 @@ BASE.physics = {
             `SWING: Z${swingZone} vs Z${actualZone} | OFFSET: ${offsetMs > 0 ? '+' : ''}${Math.round(offsetMs)}ms | QUALITY: ${quality} | DIST: ${distance}ft`
         );
 
+        // v1.4.0: Record to derby history log before handing off to result handler
+        BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Offset ${Math.round(offsetMs)}ms. Result: ${quality}.`);
+
         setTimeout(() => {
             BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
             BASE.core.onPitchResult({ quality, distance, zone: actualZone });
         }, 1200);
     },
 
-    // ── Swing and Miss ───────────────────────────────────────────────────────
+    // ── Swing and Miss ───────────────────────────────────────────────────
     _resolveSwingAndMiss() {
+        const _offsetMs = BASE.state.swing.pressTime - BASE.state.pitch.plateArrivalTime;
         BASE.audio.playStrike();
         BASE.core.announce('Strike! Swing and a miss.');
+        BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${BASE.state.pitch.actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${BASE.state.swing.zonePressed}. Offset ${Math.round(_offsetMs)}ms. Result: miss.`);
         BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
         BASE.core.onPitchResult({ quality: 'miss', distance: 0, zone: BASE.state.pitch.actualZone });
     },
 
     // ── No Swing (Ball or Called Strike) ─────────────────────────────────────
     _resolveNoPitch(actualZone) {
-        const zone   = BASE.state.ZONES[actualZone];
         // Simplified strike zone check: zones 1–9 are all technically in the zone
         // for Phase 1. Full ball/strike geometry lives in base_data.js (future).
-        const called = 'Strike! Called.';
         BASE.audio.playStrike();
-        BASE.core.announce(called);
+        BASE.core.announce('Strike! Called.');
+        BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing none. Offset N/A. Result: called_strike.`);
         BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
         BASE.core.onPitchResult({ quality: 'called_strike', distance: 0, zone: actualZone });
     },

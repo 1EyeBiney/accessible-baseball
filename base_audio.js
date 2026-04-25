@@ -1,4 +1,4 @@
-/* base_audio.js - v1.3.0 */
+/* base_audio.js - v1.4.0 */
 
 // S2: BASE namespace. S3: Web Audio API only for gameplay telemetry.
 
@@ -137,8 +137,9 @@ BASE.audio = {
         gainNode.gain.linearRampToValueAtTime(0.5, ctx.currentTime + dur * 0.85);
         gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
 
-        // v1.3.0: Pan ramps from 0.0 (centre at release) to zone.pan (at plate)
-        panner.pan.setValueAtTime(0.0, ctx.currentTime);
+        // v1.4.0: Pan starts at 40% of zone.pan (hints at trajectory from release)
+        // then ramps to the full zone position as the ball arrives at the plate.
+        panner.pan.setValueAtTime(zone.pan * 0.4, ctx.currentTime);
         panner.pan.linearRampToValueAtTime(zone.pan, ctx.currentTime + dur);
 
         osc.connect(gainNode);

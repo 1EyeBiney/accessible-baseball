@@ -1,4 +1,4 @@
-/* base_state.js - v1.3.0 */
+/* base_state.js - v1.4.1 */
 
 // BASE namespace root — all runtime state lives here. Nothing else writes to
 // BASE.state.current directly; use BASE.state.setState() exclusively.
@@ -104,6 +104,7 @@ BASE.state = {
         homers:           0,
         hits:             0,
         outs:             0,
+        history:          [], // v1.4.0: per-pitch result log; cleared on reset
     },
 
     // ── Swing Style (v1.1.0) ─────────────────────────────────────────────────

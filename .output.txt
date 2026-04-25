@@ -1,26 +1,50 @@
 Semantic workspace search is not currently available
-Thinking: Let me read the current state of base_physics.js to find the exact strings to replace.
-Read base_physics.js, lines 100 to 158
-Read base_physics.js, lines 80 to 220
-I have all the exact strings needed.
-Replacing 12 lines with 15 lines in base_physics.js
+Thinking: Looking at the version history to see if these features are already implemented in v1.4.3.
+These changes were already applied in v1.4.3. Let me verify and confirm:
+Read base_core.js, lines 1 to 50
+Thinking: I see the issue now — the v1.4.3 update only changed the header but didn't actually apply the multi_replace edit to the DOM refs initialization block, so the wiring is still missing. That's why the user needs v1.4.4 to fix it properly. Let me apply that change now.
+You're right — the DOM ref + init wiring never landed in v1.4.3 (the header replacement succeeded but the body replacement silently failed). Applying now:
+Replacing 25 lines with 33 lines in base_core.js
 ```
 ```
 ```
 ```
-All three tasks applied in one pass. Changes in
-base_physics.js (/c:/nbs/baseball/base_physics.js)
-:
-**Header**: `v1.3.0` → `v1.3.1`
-**
-offsetLabel (c:\nbs\baseball\base_physics.js:197)
-**: Now returns &#39;perfect timing&#39; when
-|offsetMs| ≤ 2ms (c:\nbs\baseball\base_state.js:126)
-(accounts for rAF timing jitter), otherwise &quot;45ms late&quot; / &quot;45ms early&quot; as before
-**
-dist >= 2 (c:\nbs\baseball\base_physics.js:188)
-block**:
-BASE.audio.playCatcherMitt() (c:\nbs\baseball\base_state.js:6)
-fires before
-setState(RESULT_ANNOUNCE) (c:\nbs\baseball\base_state.js:25)
-— gives the batter the same audible "ball hit the mitt" feedback on a wrong-zone in-window swing as they get on a pitch that passes completely untouched
+Thinking: One of the operations succeeded while the other didn't, so I need to investigate what went wrong.
+Read base_core.js, lines 1 to 35
+Thinking: The header replacement worked, but the body block didn't update even though the text matched exactly — there might be a whitespace or special character issue with the box-drawing characters. Let me try a more targeted replacement with simpler text to avoid any encoding problems.
+The header replaced but the body replacement failed — likely a unicode mismatch on the box-drawing chars. Trying again with a tighter, ASCII-only context:
+Replacing 4 lines with 6 lines in base_core.js
+Replacing 16 lines with 22 lines in base_core.js
+```
+```
+```
+```
+```
+```
+Both replacements landed. Let me verify:
+Read base_core.js, lines 7 to 42
+Thinking: I'm noticing the file structure got corrupted during the replacement process — the init() function header got mangled and merged with the line below it, and there are orphaned closing braces scattered throughout. Let me examine the actual file content more carefully to understand what went wrong.
+The file is corrupted — the second replacement overlapped the first. Let me read the full broken section:
+Read base_core.js, lines 15 to 55
+Thinking: I see there's a syntax error in the code block with a mangled comment and a stray closing brace, so I need to replace that section with a properly formatted version.
+Confirmed corruption. Fixing the entire init block now:
+Replacing 28 lines with 28 lines in base_core.js
+```
+```
+```
+```
+Checked base_core.js, no problems found
+Read base_core.js, lines 7 to 45
+Clean — no syntax errors, structure restored.
+v1.4.4 applied:
+DOM refs
+_telemetryPanel (c:\nbs\baseball\base_core.js:14)
+and
+_telemetryTextarea (c:\nbs\baseball\base_core.js:15)
+added
+init() (c:\nbs\baseball\base_audio.js:12)
+now assigns both refs and wires
+telemetry-download (c:\BCI\VSCode-win32-x64-1.116.0\560a9dba96\resources\app\extensions\node_modules\typescript\lib\lib.dom.d.ts:17042)
+/ telemetry-close button click listeners (using optional chaining ?. so missing elements don't throw)
+Header → v1.4.4
+Note on what happened: During v1.4.3 the multi-replace silently dropped the body change for this block (which is why telemetry buttons weren't doing anything for you). The first attempt of this hotfix also failed and then a second attempt corrupted the file — I caught the corruption, repaired it, and the linter now reports zero errors. The telemetry panel's Download and Close buttons should now work correctly.
