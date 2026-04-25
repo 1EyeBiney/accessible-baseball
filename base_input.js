@@ -50,11 +50,13 @@ BASE.input = {
             return;
         }
 
-        // ── Spacebar: Initiate Pitch (BATTER_UP state only) ──────────────────
+        // ── Spacebar: Call for the Pitch (BATTER_UP state only) ───────────
+        // v1.1.3: Pick a random target zone (1–9) and hand off directly to physics.
         if (e.code === 'Space') {
             if (BASE.state.current !== BASE.state.STATES.BATTER_UP) return;
             e.preventDefault();
-            BASE.core.onInitiatePitch();
+            const randomTargetZone = Math.ceil(Math.random() * 9);
+            BASE.physics.launchPitch(randomTargetZone);
             return;
         }
     },

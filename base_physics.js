@@ -9,6 +9,15 @@ BASE.physics = {
     _pitchLoopId:    null,
     _pitchLoopToken: 0,   // S2 async token pattern — bumped on every new pitch
 
+    // ── Swing Style Contact Windows (v1.1.2) ─────────────────────────────────
+    // Progress thresholds (0.0–1.0) within which a registered swing counts as
+    // being in the contact zone. Wider window = more forgiving, less power.
+    STYLE_WINDOWS: {
+        choke_up: { lo: 0.80, hi: 1.00 },
+        standard: { lo: 0.85, hi: 0.95 },
+        power:    { lo: 0.88, hi: 0.92 },
+    },
+
     // ── Pitcher Command Check ────────────────────────────────────────────────
     // If the pitcher's command roll fails, the ball routes to Zone 5 (center).
     // commandRating : 1–100 (future pitcher stat; defaults to 70 for now)
@@ -29,29 +38,27 @@ BASE.physics = {
         return Math.round(1800 - (mph * 13));
     },
 
-    // ── Launch a Pitch ────────────────────────────────────────────────────────
-    // Sets up the pitch state and starts the flight loop.
-    launchPitch(targetZone, pitchType = 'fastball', speedMph = 90) {
-        if (BASE.state.current !== BASE.state.STATES.BATTER_UP &&
-            BASE.state.current !== BASE.state.STATES.DERBY_SETUP) {
-            // Guard: only launch from a valid pre-pitch state
-        }
-
-        // Resolve actual landing zone after command check
+    // ── Launch a Pitch (v1.1.3) ──────────────────────────────────────────────
+    // Two-phase entry:
+    //   Phase A (sync) — resolve mph + actualZone, store in state, set WIND_UP,
+    //                    announce, play telegraph hum.
+    //   Phase B (after random 1–2s windup timeout) — set PITCH_IN_FLIGHT, start
+    //                    Doppler flight audio, begin the rAF loop.
+    launchPitch(targetZone, pitchType = 'fastball', speedMph = null) {
+        // Resolve actual landing zone after pitcher command check
         const actualZone = BASE.physics.resolvePitchZone(targetZone);
-        const durationMs = BASE.physics.speedToDurationMs(speedMph);
-        const now        = performance.now();
+        // Random 80–100 mph if not provided
+        const mph        = (speedMph !== null) ? speedMph : (80 + Math.floor(Math.random() * 21));
+        const durationMs = BASE.physics.speedToDurationMs(mph);
 
-        // Write into shared state
-        BASE.state.pitch.targetZone       = targetZone;
-        BASE.state.pitch.actualZone       = actualZone;
-        BASE.state.pitch.type             = pitchType;
-        BASE.state.pitch.speedMph         = speedMph;
-        BASE.state.pitch.startTime        = now;
-        BASE.state.pitch.durationMs       = durationMs;
-        BASE.state.pitch.plateArrivalTime = now + (durationMs * 0.90);
-        BASE.state.pitch.plateSyncFired   = false;
-        BASE.state.pitch.inFlight         = true;
+        // Write into shared state (timing fields filled in Phase B)
+        BASE.state.pitch.targetZone     = targetZone;
+        BASE.state.pitch.actualZone     = actualZone;
+        BASE.state.pitch.type           = pitchType;
+        BASE.state.pitch.speedMph       = mph;
+        BASE.state.pitch.durationMs     = durationMs;
+        BASE.state.pitch.plateSyncFired = false;
+        BASE.state.pitch.inFlight       = false;
 
         // Clear any previous swing data
         BASE.state.swing.zonePressed     = null;
@@ -60,14 +67,31 @@ BASE.physics = {
         BASE.state.swing.progressAtSwing = 0;
         BASE.state.swing.quality         = null;
 
-        BASE.state.setState(BASE.state.STATES.PITCH_IN_FLIGHT);
+        // ── Phase A: Wind Up ──────────────────────────────────────────────────
+        BASE.state.setState(BASE.state.STATES.WIND_UP);
+        BASE.core.announce('Pitcher winding up...');
+        BASE.audio.playTargetHum(actualZone); // pre-pitch orientation cue
 
-        // Play approach audio
-        BASE.audio.playPitchFlight(actualZone, durationMs);
+        // Random windup duration: 1000–2000ms
+        const windupMs = 1000 + Math.floor(Math.random() * 1001);
 
-        // Start the loop
-        BASE.physics._pitchLoopToken++;
-        BASE.physics._runPitchLoop(BASE.physics._pitchLoopToken, now, durationMs, actualZone);
+        setTimeout(() => {
+            // Guard: only proceed if still in WIND_UP (future: balks/pickoffs could exit early)
+            if (BASE.state.current !== BASE.state.STATES.WIND_UP) return;
+
+            // ── Phase B: Pitch In Flight ──────────────────────────────────────
+            const now = performance.now();
+            BASE.state.pitch.startTime        = now;
+            BASE.state.pitch.plateArrivalTime = now + (durationMs * 0.90);
+            BASE.state.pitch.inFlight         = true;
+
+            BASE.state.setState(BASE.state.STATES.PITCH_IN_FLIGHT);
+
+            BASE.audio.playPitchFlight(actualZone, durationMs);
+
+            BASE.physics._pitchLoopToken++;
+            BASE.physics._runPitchLoop(BASE.physics._pitchLoopToken, now, durationMs, actualZone);
+        }, windupMs);
     },
 
     // ── Pitch Loop ────────────────────────────────────────────────────────────
@@ -95,11 +119,13 @@ BASE.physics = {
             BASE.audio.playPlateSync();
         }
 
-        // ── 85%–95% Window: Check if batter already swung ────────────────────
+        // ── Style-Aware Contact Window: Check if batter already swung (v1.1.2) ──
         // (Swing is registered in base_input.js; we check it here on each frame.)
+        const _win = BASE.physics.STYLE_WINDOWS[BASE.state.swingStyle] ||
+                     BASE.physics.STYLE_WINDOWS.standard;
         if (BASE.state.swing.zonePressed !== null &&
-            BASE.state.swing.progressAtSwing >= 0.85 &&
-            BASE.state.swing.progressAtSwing <= 0.95 &&
+            BASE.state.swing.progressAtSwing >= _win.lo &&
+            BASE.state.swing.progressAtSwing <= _win.hi &&
             BASE.state.swing.quality === null) {
             // Swing landed in the contact window — play thwack, resolve contact
             BASE.audio.playThwack();
@@ -138,12 +164,14 @@ BASE.physics = {
         const offsetMs  = BASE.state.swing.pressTime - BASE.state.pitch.plateArrivalTime;
         BASE.state.swing.offsetMs = offsetMs;
 
-        // ── Zone Match Check (v1.1.1) ─────────────────────────────────────────
-        // A pitch that landed in Zone 5 due to a pitcher command miss is a "fat
-        // pitch" — the batter earns contact regardless of which zone they swung.
+        // ── Zone Match Check (v1.1.2) ─────────────────────────────────────────
+        // A pitcher command miss (targetZone ≠ actualZone) leaves the ball fat
+        // over the middle. Batter earns a zone match only when swinging the
+        // center row (zones 4, 5, 6) — directly in the fat-pitch corridor.
         // All other zone mismatches resolve as a Foul.
-        const isPitcherMiss = (actualZone === 5 && BASE.state.pitch.targetZone !== actualZone);
-        const zoneMatch     = (swingZone === actualZone) || isPitcherMiss;
+        const isPitcherMiss = (BASE.state.pitch.targetZone !== BASE.state.pitch.actualZone);
+        const zoneMatch     = (swingZone === actualZone) ||
+                              (isPitcherMiss && [4, 5, 6].includes(swingZone));
 
         if (!zoneMatch) {
             BASE.state.swing.quality = 'foul';
@@ -189,10 +217,9 @@ BASE.physics = {
         };
         (impactFn[quality] || BASE.audio.playSolid)();
 
-        // Compute ball flight distance (rough — expandable in base_data.js later)
-        const baseDist  = BASE.physics._qualityToDistance(quality);
-        const powerMod  = (BASE.state.player.powerRating / 50) * style.powerMult;
-        const distance  = Math.round(baseDist * powerMod);
+        // Compute ball flight distance — powerRating scaling lives in _qualityToDistance
+        const baseDist  = BASE.physics._qualityToDistance(quality, BASE.state.player.powerRating);
+        const distance  = Math.round(baseDist * style.powerMult);
 
         BASE.state.setState(BASE.state.STATES.BALL_IN_FLIGHT);
 
@@ -231,9 +258,10 @@ BASE.physics = {
     },
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-    _qualityToDistance(quality) {
+    // powerRating 50 = neutral (1.0×). 100 = 2×. 25 = 0.5×.
+    _qualityToDistance(quality, powerRating = 50) {
         const base = { homer: 390, flush: 310, solid: 220, topped: 90 };
-        return base[quality] || 90;
+        return Math.round((base[quality] || 90) * (powerRating / 50));
     },
 
     _directionLabel(zone) {

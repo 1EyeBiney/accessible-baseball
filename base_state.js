@@ -114,7 +114,7 @@ BASE.state = {
     player: {
         name:          'Batter',
         contactRating: 50,   // 1–100; widens swing timing window
-        powerRating:   50,   // 1–100; increases ball flight distance
+        powerRating:   50,   // 1–100; passed to physics._qualityToDistance() as distance multiplier (50 = neutral)
         vision:        50,   // 1–100; future: affects telegraph audio clarity
     },
 

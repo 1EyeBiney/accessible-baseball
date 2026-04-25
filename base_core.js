@@ -52,10 +52,12 @@ BASE.core = {
         BASE.input.init();
 
         BASE.state.isInitialized = true;
-        BASE.state.setState(BASE.state.STATES.DERBY_SETUP);
 
-        BASE.core.announce('Engine initialized. Accessible Baseball v1.1.0. Press Space to start the Home Run Derby.');
-        BASE.core.updateBuffer('ENGINE READY — v1.1.0\nMode: Home Run Derby\nSwing Style: Standard\nUse Numpad 1–9 to swing. + / - to change swing style.');
+        // v1.1.4: Boot directly into BATTER_UP so Spacebar can call for the pitch.
+        BASE.state.setState(BASE.state.STATES.BATTER_UP);
+        BASE.audio.playStyleChange();
+        BASE.core.announce('Engine Ready. Press Spacebar to call for the pitch.');
+        BASE.core.updateBuffer('ENGINE READY — v1.1.4\nMode: Home Run Derby\nSwing Style: Standard\nSpace = call pitch | Numpad 1–9 = swing | + / - = swing style');
     },
 
     // ── ARIA Announcer ────────────────────────────────────────────────────────
@@ -100,43 +102,68 @@ BASE.core = {
         }
     },
 
-    // ── Pitch Result Handler ──────────────────────────────────────────────────
+    // ── Pitch Result Handler (v1.1.3) ────────────────────────────────────────
     // Called by base_physics.js when a pitch resolves (hit, miss, or called).
+    // Updates Derby tallies, announces the running score, then 3s auto-advance.
     onPitchResult(result) {
         const { quality, distance } = result;
 
-        // Update derby counters
+        // ── Derby Tallies ─────────────────────────────────────────────────────
+        BASE.state.derby.pitchesRemaining--;
+
         if (quality === 'homer') {
             BASE.state.derby.homers++;
-            setTimeout(() => BASE.core.announce(`HOME RUN! ${BASE.state.derby.homers} homer${BASE.state.derby.homers > 1 ? 's' : ''}!`), 300);
-        } else if (['flush', 'solid'].includes(quality)) {
+        } else if (quality === 'flush' || quality === 'solid') {
             BASE.state.derby.hits++;
         } else {
             BASE.state.derby.outs++;
         }
 
-        BASE.state.derby.pitchesRemaining--;
+        // ── Result + Score Announcement ───────────────────────────────────────
+        const homers    = BASE.state.derby.homers;
+        const remaining = BASE.state.derby.pitchesRemaining;
+        const hPlural   = homers === 1 ? 'homer' : 'homers';
+        const pPlural   = remaining === 1 ? 'pitch' : 'pitches';
 
-        if (BASE.state.derby.pitchesRemaining <= 0) {
-            BASE.core._endDerby();
-            return;
+        let resultText;
+        if (quality === 'homer') {
+            resultText = `HOME RUN! ${distance} feet!`;
+        } else if (quality === 'flush') {
+            resultText = `Deep shot — ${distance} feet.`;
+        } else if (quality === 'solid') {
+            resultText = `Base hit — ${distance} feet.`;
+        } else if (quality === 'topped') {
+            resultText = `Weak contact — ${distance} feet.`;
+        } else if (quality === 'foul') {
+            resultText = 'Foul ball.';
+        } else if (quality === 'miss') {
+            resultText = 'Swing and a miss.';
+        } else {
+            resultText = 'Called strike.';
         }
 
-        // Ready for next pitch
+        const scoreText = `You have ${homers} ${hPlural} and ${remaining} ${pPlural} remaining.`;
+        // Slight delay so the impact tone breathes before the score is read
+        setTimeout(() => BASE.core.announce(`${resultText} ${scoreText}`), 300);
+        BASE.core.updateBuffer(
+            `DERBY | HR: ${homers} | HITS: ${BASE.state.derby.hits} | OUTS: ${BASE.state.derby.outs} | PITCHES LEFT: ${remaining}`
+        );
+
+        // ── Auto-Advance Timer (3s) ───────────────────────────────────────────
         setTimeout(() => {
-            BASE.state.setState(BASE.state.STATES.BATTER_UP);
-            BASE.core.announce(
-                `${BASE.state.derby.pitchesRemaining} pitches left. Press Space to swing.`
-            );
-            BASE.core.updateBuffer(
-                `DERBY | HR: ${BASE.state.derby.homers} | HITS: ${BASE.state.derby.hits} | PITCHES LEFT: ${BASE.state.derby.pitchesRemaining}`
-            );
-        }, 1500);
+            if (remaining > 0) {
+                BASE.state.setState(BASE.state.STATES.BATTER_UP);
+                BASE.core.announce('Press Spacebar to call for the pitch.');
+            } else {
+                BASE.state.setState(BASE.state.STATES.DERBY_OVER);
+                BASE.core._endDerby();
+            }
+        }, 3000);
     },
 
     // ── End Derby ─────────────────────────────────────────────────────────────
+    // State is already set to DERBY_OVER by onPitchResult before calling this.
     _endDerby() {
-        BASE.state.setState(BASE.state.STATES.DERBY_OVER);
         const { homers, hits } = BASE.state.derby;
         BASE.core.announce(
             `Derby over! You hit ${homers} home run${homers !== 1 ? 's' : ''} and ${hits} total hits. Press Space to play again.`
@@ -154,14 +181,14 @@ BASE.core = {
         document.addEventListener('keydown', restartHandler);
     },
 
-    // ── Reset Derby ───────────────────────────────────────────────────────────
+    // ── Reset Derby ────────────────────────────────────────────────────────────
     _resetDerby() {
         BASE.state.derby.pitchesRemaining = 10;
         BASE.state.derby.homers           = 0;
         BASE.state.derby.hits             = 0;
         BASE.state.derby.outs             = 0;
-        BASE.state.setState(BASE.state.STATES.DERBY_SETUP);
-        BASE.core.announce('New derby. Press Space to begin.');
+        BASE.state.setState(BASE.state.STATES.BATTER_UP);
+        BASE.core.announce('New derby. Press Spacebar to call for the pitch.');
         BASE.core.updateBuffer('DERBY RESET — Press Space to pitch.');
     },
 };

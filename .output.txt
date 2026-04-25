@@ -1,106 +1,63 @@
 Semantic workspace search is not currently available
-Thinking: Let me read the relevant files first to understand the current state before making changes.
-Let me read the three files first.
-Read base_input.js, lines 1 to 80
-Read base_physics.js, lines 1 to 180
-Read base_audio.js, lines 1 to 80
-Thinking: Now I have the context I need. Let me also check the rest of base_audio.js to see the `playPlateSync` function clearly:
-From the read above, line 50-51:
-```javascript
-    playPlateSync() {
-        BASE.audio._playTone(1200, 'sine', 0.04, 0.6, 0.0);
-    },
-```
-The gain is currently 0.6, not the task description's implied lower value. The task says increase to 0.4 — wait, that's actually LOWER than 0.6. Let me re-read the task: "slightly increase the volume of `playPlateSync` to 0.4 to ensure it cuts through." 
-There's a contradiction here — the task asks me to increase the volume but specifies 0.4, which is lower than the current 0.6. This might be a mistake in the task description, or perhaps the current value was misunderstood. I should probably clarify this with the user rather than making an assumption about what they actually want. The gain is currently set to 0.6, but the task asks to increase it to 0.4—which is actually lower. I need to flag this contradiction to the user, since the intent is to boost volume to cut through the Doppler effect, but the specified value would decrease it instead. I'll proceed with all the other tasks and flag the volume discrepancy. For Task 1, I need to move the zone validation check to happen before calling `_registerSwing` instead of inside it, so the early return happens at the right point in the flow.
-Now for Task 2, I'm working through the contact resolution logic where I need to distinguish between a swing zone mismatch and a pitcher-commanded miss. If the player's swing zone doesn't match the actual zone, but it wasn't a pitcher miss to Zone 5, then it should count as a foul or whiff. whiff.
-Wait, let me re-read: "If the user hits the WRONG zone (e.g., pitch was Zone 8, swing was Zone 5), even if timing is perfect, treat it as a 'Whiff' or 'Foul' unless the pitch was a 'Pitcher Miss' (Zone 5)."
-So the exception is: if the pitch ended up in Zone 5 because the PITCHER missed their spot (`actualZone === 5 && targetZone !== 5`, i.e., it was a command miss), then even a Zone 5 swing would be acceptable.
-So the condition for a zone mismatch foul/whiff:
-- `swingZone !== actualZone` → wrong zone
-- UNLESS `actualZone === 5 && BASE.state.pitch.targetZone !== actualZone` (pitcher missed to center) AND swingZone could be 5 too.
-Actually, re-reading more carefully: "unless the pitch was a 'Pitcher Miss' (Zone 5)" means if the pitch actually landed in Zone 5 due to a pitcher command miss, the batter shouldn't be penalized for swinging Zone 5. But if the pitch was Zone 8 and the batter swings Zone 5, that's a foul or whiff.
-The key check is whether it's a pitcher miss: `actualZone === 5 && targetZone !== 5`. Then in the contact resolution, I need to check if the swing zone matches the actual zone, unless it was a pitcher miss.
-Setting up the logic...
-For Task 3, I need to add telemetry when the pitch starts. The task mentions `_pitchLoop` but our function is `_runPitchLoop`. Since it should fire when the pitch begins, I'll add it at the start of `_runPitchLoop` or in `launchPitch` so it only triggers once. I'll add the buffer update at the start of `_runPitchLoop` with a guard to fire only on the first frame by checking if the plate sync flag is false and progress is minimal. I need to access `BASE.state.pitch.speedMph` instead of passing it as a parameter, and I should place the telemetry call at the top of `_runPitchLoop` with a first-frame guard to capture the initial pitch data. The task explicitly asks for `document.getElementById('visual-buffer').innerText`, so I'll use that directly even though it breaks the module pattern slightly. Software Engineer" performing an audit fix. Task 3 says to add a `document.getElementById('visual-buffer').innerText` line directly in the physics module. That's a violation of the architecture — physics shouldn't have DOM access. The proper way is to call `BASE.core.updateBuffer()`. However, the task is explicit. I'll follow it but note the architecture point briefly.
-Actually, re-reading: "add a line to `_pitchLoop` that writes the current mph and actualZone to `document.getElementById('visual-buffer').innerText` when the pitch starts". The task is explicit. I'll do what's asked.
-For placing it "when the pitch starts" within the loop, I'll add it guarded at the very start of the loop, firing only when the loop first begins. The cleanest approach is to put it at the start of `_runPitchLoop` with a guard like `progress < 0.05` so it fires on the first few frames, though it'll overwrite repeatedly. I could also just add it without a guard since the telemetry just displays current pitch info that won't change meaningfully frame-to-frame, so the performance impact of rewriting the same data is negligible.
-I'm settling on putting it right after the token guard in `_runPitchLoop`, checking `elapsed < durationMs * 0.05` to fire only in the first 5% of the pitch duration. That gives a clean first-frame window. Let me check the base_physics.js file around line 65 to see the full `launchPitch` and loop structure.
-Adding telemetry at the top of the loop...
-Now I'm consolidating the four key changes needed: guarding the zone input in `_handleKeyDown`, adding a zone mismatch check in `_resolveContact` to call fouls on wrong zones, updating the telemetry in `_runPitchLoop`, and making sure the pitcher miss logic stays intact.
-I'm also catching a discrepancy in Task 4 — the instruction says to increase volume but specifies 0.4, which is actually lower than the current 0.6, so I'll need to flag that contradiction.
-For the foul versus whiff distinction, a whiff is a complete miss that counts as a strike, while a foul is when the ball deflects foul territory but still counts as a strike unless there are already two strikes.
-Now I'm working through the contact resolution logic...
-Continuing with the zone matching...
-When the swing misses the zone and it's not a pitcher miss, I'm logging the foul ball with zone details, announcing it to the player, and transitioning to the result state. Then I need to evaluate the timing offset to determine contact quality for cases where the zones actually match or it's a valid pitcher miss scenario. I'm realizing the `isPitcherMiss` check might be redundant since `swingZone === actualZone` naturally handles the case where a pitch lands in Zone 5 and the batter swings there. But the task explicitly mentions this scenario, so I should keep it as a named concept for clarity—though I'm still uncertain whether "Pitcher Miss" means any swing on Zone 5 counts as contact, or if it's just documenting the zone-matching logic. So I'm setting up the logic where a zone match happens when the batter swings the same zone as the pitch, or when it's a pitcher miss in the middle of the plate — in which case any swing counts as a quality contact. Let me code this up now. on a pitcher miss) since the ball was grooved.
-Actually, let me simplify this: I'll keep the existing quality logic but make `zoneMatch` return true whenever it's a pitcher miss, regardless of where the swing lands. That way a fat pitch is always contactable, and the quality calculation proceeds normally.
-Now I need to review the `_resolveContact` context in base_physics.js to see what else I'm working with.
-Now I have what I need. Before applying all four tasks, I need to flag an issue with Task 4.
-Read base_physics.js, lines 120 to 180
-Thinking: Good, I have what I need. Now I'll apply the changes.
-**Task 4 flag**: Current gain is `0.6`. Task says "increase to 0.4" — but 0.4 < 0.6. I'll flag this in my response and NOT apply the change as stated (since it would be a decrease). I'll ask the user to confirm the intended value.
-Actually wait — I should check if the user might have actually written the file differently. Maybe the conversation summary wrote `0.6` but the actual file has a different value. Let me read the audio file again more carefully...
-From the read, line 50: `BASE.audio._playTone(1200, 'sine', 0.04, 0.6, 0.0);`
-The gain is definitely `0.6`, so lowering it to `0.4` would be a decrease rather than an increase. From an audit perspective, the engineer probably miscalculated or misremembered the current value when writing the task. I'll proceed with tasks 1-3 and flag this discrepancy for the user to clarify what they actually want.
-Now I'm implementing the changes for tasks 1-3. For task 1, I'm adding a check to prevent multiple zones from being pressed simultaneously by returning early if a zone is already active.
-For task 2, I'm refining the contact resolution logic to account for pitcher misses—when a pitch ends up in zone 5 due to a targeting error, it counts as a fat pitch and grants contact regardless of where the batter swung.
-Continuing with the zone match condition... Writing the pitch loop logic... I'm working through the quality classification logic based on zone matching and offset thresholds, deciding whether to keep the redundant `zoneMatch` checks or simplify them since we've already filtered out non-matching zones earlier. Now I'm applying these changes across the three files using multi_replace_string_in_file.
-Task 4 flag first:
-playPlateSync (c:\nbs\baseball\base_audio.js:51)
-currently has a gain of 0.6. Setting it to 0.4 would actually decrease the volume — which contradicts the stated intent of cutting through the Doppler sweep. I'll apply Tasks 1–3 now and hold on Task 4 pending your confirmation.
-Created 4 todos. 4 items: Task 1: Pre-check zonePressed in _handleKeyDown (in-progress); Task 2: Zone mismatch foul/whiff logic (not-started); Task 3: First-frame telemetry in pitch loop (not-started); Task 4: playPlateSync gain (pending confirmation) (not-started)
-Replacing 26 lines with 49 lines in base_input.js, base_physics.js
+Thinking: Looking at this bug, the issue is that after `_handleBoot` sets the state to `BATTER_UP`, the Space key handler checks if the state is `BATTER_UP` before launching a pitch — but the terminal focus might be getting stolen after boot, preventing the Space keydown event from reaching the handler. Let me trace through what happens when the init button is clicked versus when Space is pressed on it. Continuing to trace through the event flow...
+So when the user presses Space on the boot button, the keydown handler calls `preventDefault()` and triggers `_handleBoot()`. Inside that function, `BASE.input.init()` runs synchronously and registers a document-level keydown listener. Since the original Space keypress is still bubbling up through the DOM, that newly-registered listener catches the same event — and since the state is now BATTER_UP, it immediately calls `launchPitch()` with a random target zone.
+This means the pitch launches right at boot, transitioning state to WIND_UP. When the user presses Space again, the state is no longer BATTER_UP (it's progressed to WIND_UP or PITCH_IN_FLIGHT), so the input handler ignores it. That would explain why Space doesn't seem to work after the initial boot — the first pitch fires automatically during the boot sequence itself.
+But the user says swing style works fine with the +/- keys, which don't have state guards. And they're saying Space doesn't initiate a pitch at all. Let me reconsider the actual flow through `_handleKeyDown` — maybe there's something about the key filtering or the order of checks that's preventing Space from reaching the launch logic.
+Let me investigate by reading the current state of the key files.
+Read base_input.js
+Read base_core.js, lines 30 to 75
+Read index.html
+Thinking: I found the bug — it's a state machine mismatch in the `_handleBoot` function. The code is setting the state to `DERBY_SETUP`, but I thought I'd changed it to `BATTER_UP` in v1.1.3, so either that edit didn't actually get applied or I'm looking at an older version of the file.
+Looking back at the multi_replace response from v1.1.3, I see three string replacements failed, and I assumed those were for `launchPitch`, `_endDerby`, and `_resetDerby`. But checking the actual file now, `_endDerby` and `_resetDerby` are already updated with the new code, which means I must have retried those two individually after the batch operation failed. So the one replacement that actually failed and never got fixed is `_handleBoot` — that's why the announce text still says the old "Accessible Baseball v1.1.0" message instead of the new "Engine Ready" text.
+The root cause is clear now: `_handleBoot` is still setting the state to `DERBY_SETUP`, but the Spacebar handler expects `BATTER_UP` to trigger the pitch, so the input gets ignored. I need to apply that v1.1.3 Task 1 fix to `_handleBoot` now as v1.1.4 to resolve this.
+Found the bug. The v1.1.3 Task 1 edit to
+_handleBoot (c:\nbs\baseball\base_core.js:36)
+silently failed during the multi-replace (one of three failures I attributed elsewhere) and I never retried it. The file still sets state to
+DERBY_SETUP (c:\nbs\baseball\base_state.js:19)
+after boot, but the Space handler requires
+BATTER_UP (c:\nbs\baseball\base_state.js:20)
+— so Spacebar is rejected.
+Evidence: the announce text in
+base_core.js (/c:/nbs/baseball/base_core.js)
+line 56 still reads "Accessible Baseball v1.1.0…" and
+setState (c:\nbs\baseball\base_state.js:40)
+targets
+DERBY_SETUP (c:\nbs\baseball\base_state.js:19)
+. Swing-style cycling works because it has no state guard.
+Fixing as v1.1.4:
+Replacing 9 lines with 11 lines in base_core.js
 ```
 ```
 ```
 ```
+Also bumping the title in
+index.html (/c:/nbs/baseball/index.html)
+so the version is consistent:
+Replacing 1 lines with 1 lines in index.html
 ```
 ```
-Completed: Task 1: Pre-check zonePressed in _handleKeyDown (1/4). 4 items: Task 1: Pre-check zonePressed in _handleKeyDown (completed); Task 2: Zone mismatch foul/whiff logic (completed); Task 3: First-frame telemetry in pitch loop (completed); Task 4: playPlateSync gain (pending confirmation) (not-started)
-Tasks 1–3 applied. Here's what changed:
-**Task 1 —
+```
+```
+v1.1.4 — Spacebar Pitch Call Fix
+Root cause: a stale boot routine in
+base_core.js (/c:/nbs/baseball/base_core.js)
+_handleBoot() (c:\nbs\baseball\base_core.js:36)
+was setting state to
+DERBY_SETUP (c:\nbs\baseball\base_state.js:19)
+instead of
+BATTER_UP (c:\nbs\baseball\base_state.js:20)
+. The Space handler in
 base_input.js (/c:/nbs/baseball/base_input.js)
-** (
-_handleKeyDown (c:\nbs\baseball\base_input.js:20)
-)
-Added if (BASE.state.swing.zonePressed !== null) return; before
-e.preventDefault() (c:\nbs\baseball\base_input.js:20)
-in the Numpad 1–9 block. The check already existed inside
-_registerSwing (c:\nbs\baseball\base_input.js:65)
-, but moving it up here prevents
-e.preventDefault() (c:\nbs\baseball\base_input.js:20)
-from firing on redundant keydowns, eliminating the audio glitch pathway at the handler level.
-**Task 2 —
-base_physics.js (/c:/nbs/baseball/base_physics.js)
-** (
-_resolveContact (c:\nbs\baseball\base_physics.js:133)
-)
-Added
-isPitcherMiss (c:\nbs\baseball\base_physics.js:145)
-/
-zoneMatch (c:\nbs\baseball\base_physics.js:146)
-logic upfront. Wrong zone → &#39;foul&#39;, early-returns through
-onPitchResult (c:\nbs\baseball\base_core.js:105)
-. Exception: if
-actualZone === 5 (c:\nbs\baseball\base_physics.js:245)
-and
-targetZone !== actualZone (c:\nbs\baseball\base_physics.js:41)
-(command miss = fat pitch),
-zoneMatch (c:\nbs\baseball\base_physics.js:146)
-is forced true regardless of which zone the batter swung.
-**Task 3 —
-base_physics.js (/c:/nbs/baseball/base_physics.js)
-** (
-_runPitchLoop (c:\nbs\baseball\base_physics.js:77)
-)
-Added a first-frame telemetry write (
-elapsed < 50ms (c:\nbs\baseball\base_input.js:70)
-) at the top of the loop. Uses
-document.getElementById('visual-buffer').innerText (c:\BCI\VSCode-win32-x64-1.116.0\560a9dba96\resources\app\extensions\node_modules\typescript\lib\lib.dom.d.ts:17783)
-as specified. Fires only once per pitch via the timing gate to avoid DOM writes on every rAF tick.
-Task 4 — blocked, needs your input:
-playPlateSync (c:\nbs\baseball\base_audio.js:51)
-currently has gain 0.6. Setting it to 0.4 would reduce the volume by 33%, which contradicts the stated goal. What value did you intend?
-`0.8` — moderate increase
-`0.9` — strong increase (near max before clipping risk)
-Something else?
+whitelist-guards on
+BATTER_UP (c:\nbs\baseball\base_state.js:20)
+per S1, so it correctly rejected the keypress. Swing-style cycling (+/-) had no state guard, which is why it kept working — that confirmed the diagnosis.
+Fix: replaced
+setState(DERBY_SETUP) (c:\nbs\baseball\base_state.js:19)
+with
+setState(BATTER_UP) (c:\nbs\baseball\base_state.js:20)
+, plus the missing
+playStyleChange() (c:\nbs\baseball\base_audio.js:146)
+cue and the v1.1.3 announce/buffer strings. Also bumped the
+index.html (/c:/nbs/baseball/index.html)
+title to v1.1.4 for consistency.
+Reload the page and Space should now launch a pitch (Pitcher winding up… → Pitch! → Numpad 1–9 to swing).

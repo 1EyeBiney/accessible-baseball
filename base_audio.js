@@ -49,7 +49,7 @@ BASE.audio = {
     // A very brief 1200Hz sine blip that fires when the pitch crosses the plate
     // (at 90% of pitch loop progress). This is the batter's "contact cue."
     playPlateSync() {
-        BASE.audio._playTone(1200, 'sine', 0.04, 0.6, 0.0);
+        BASE.audio._playTone(1200, 'sine', 0.04, 0.5, 0.0);
     },
 
     // ── Thwack (v1.1.0) ──────────────────────────────────────────────────────
