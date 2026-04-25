@@ -1,4 +1,4 @@
-/* base_physics.js - v1.1.0 */
+/* base_physics.js - v1.3.1 */
 
 // S2: BASE namespace. Owns pitch trajectory math, contact quality resolution,
 // the pitch loop (including plate sync cue), and the "miss to Zone 5" command check.
@@ -20,8 +20,8 @@ BASE.physics = {
 
     // ── Pitcher Command Check ────────────────────────────────────────────────
     // If the pitcher's command roll fails, the ball routes to Zone 5 (center).
-    // commandRating : 1–100 (future pitcher stat; defaults to 70 for now)
-    resolvePitchZone(targetZone, commandRating = 70) {
+    // commandRating : 1–100. Default 100 = perfect command (no miss) for testing.
+    resolvePitchZone(targetZone, commandRating = 100) {
         const roll = Math.random() * 100;
         if (roll > commandRating) {
             // Pitcher missed their spot — leave it over the middle
@@ -47,8 +47,21 @@ BASE.physics = {
     launchPitch(targetZone, pitchType = 'fastball', speedMph = null) {
         // Resolve actual landing zone after pitcher command check
         const actualZone = BASE.physics.resolvePitchZone(targetZone);
-        // Random 80–100 mph if not provided
-        const mph        = (speedMph !== null) ? speedMph : (80 + Math.floor(Math.random() * 21));
+        // v1.3.0: mph is row-dependent when not provided.
+        // High row (7-9): 90-100mph hard heat  |  Mid row (4-6): 80-89mph  |  Low row (1-3): 70-79mph
+        let mph;
+        if (speedMph !== null) {
+            mph = speedMph;
+        } else {
+            const row = (BASE.state.ZONES[actualZone] || {}).row;
+            if (row === 'high') {
+                mph = 90 + Math.floor(Math.random() * 11);  // 90–100
+            } else if (row === 'mid') {
+                mph = 80 + Math.floor(Math.random() * 10);  // 80–89
+            } else {
+                mph = 70 + Math.floor(Math.random() * 10);  // 70–79 (low)
+            }
+        }
         const durationMs = BASE.physics.speedToDurationMs(mph);
 
         // Write into shared state (timing fields filled in Phase B)
@@ -136,6 +149,7 @@ BASE.physics = {
         // ── Pitch Complete ────────────────────────────────────────────────────
         if (progress >= 1.0) {
             BASE.state.pitch.inFlight = false;
+            BASE.audio.playCatcherMitt(); // v1.2.0: audible catch before resolution
 
             if (BASE.state.swing.zonePressed !== null) {
                 // Batter swung but outside the contact window (too early or too late)
@@ -154,8 +168,9 @@ BASE.physics = {
             );
     },
 
-    // ── Contact Resolution ────────────────────────────────────────────────────
+    // ── Contact Resolution (v1.2.0) ──────────────────────────────────────────
     // Called when swing zone + timing both fall within the contact window.
+    // Zone quality is determined by Manhattan distance on the 3×3 numpad grid.
     _resolveContact(actualZone) {
         BASE.state.pitch.inFlight = false;
         BASE.physics._pitchLoopToken++; // invalidate any residual loop frame
@@ -164,41 +179,62 @@ BASE.physics = {
         const offsetMs  = BASE.state.swing.pressTime - BASE.state.pitch.plateArrivalTime;
         BASE.state.swing.offsetMs = offsetMs;
 
-        // ── Zone Match Check (v1.1.2) ─────────────────────────────────────────
-        // A pitcher command miss (targetZone ≠ actualZone) leaves the ball fat
-        // over the middle. Batter earns a zone match only when swinging the
-        // center row (zones 4, 5, 6) — directly in the fat-pitch corridor.
-        // All other zone mismatches resolve as a Foul.
-        const isPitcherMiss = (BASE.state.pitch.targetZone !== BASE.state.pitch.actualZone);
-        const zoneMatch     = (swingZone === actualZone) ||
-                              (isPitcherMiss && [4, 5, 6].includes(swingZone));
+        // ── Manhattan Distance on 3×3 Numpad Grid ────────────────────────────
+        // Grid coords (col, row), origin bottom-left:
+        //   7(0,2) 8(1,2) 9(2,2)
+        //   4(0,1) 5(1,1) 6(2,1)
+        //   1(0,0) 2(1,0) 3(2,0)
+        const ZONE_COORDS = {
+            1:[0,0], 2:[1,0], 3:[2,0],
+            4:[0,1], 5:[1,1], 6:[2,1],
+            7:[0,2], 8:[1,2], 9:[2,2],
+        };
+        const [sx, sy] = ZONE_COORDS[swingZone] || [0, 0];
+        const [ax, ay] = ZONE_COORDS[actualZone] || [0, 0];
+        const dist     = Math.abs(sx - ax) + Math.abs(sy - ay);
 
-        if (!zoneMatch) {
+        // Human-readable offset telemetry included in every announcement (S4)
+        const offsetLabel = Math.abs(offsetMs) <= 2
+            ? 'perfect timing'
+            : Math.abs(Math.round(offsetMs)) + 'ms ' + (offsetMs > 0 ? 'late' : 'early');
+
+        // ── Distance 1: Adjacent Zone → Foul ─────────────────────────────────
+        if (dist === 1) {
             BASE.state.swing.quality = 'foul';
-            BASE.audio.playTopped(); // dull contact for a foul tip
-            BASE.core.announce(`Foul ball. Swung Zone ${swingZone} — pitch was Zone ${actualZone}.`);
-            BASE.core.updateBuffer(`FOUL | SWING Z${swingZone} vs PITCH Z${actualZone} | OFFSET: ${Math.round(offsetMs)}ms`);
+            BASE.audio.playTopped();
+            BASE.core.announce(`Foul. Clipped it. ${offsetLabel}.`);
+            BASE.core.updateBuffer(`FOUL | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | OFFSET: ${Math.round(offsetMs)}ms`);
             BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
             BASE.core.onPitchResult({ quality: 'foul', distance: 0, zone: actualZone });
             return;
         }
 
-        // Timing quality (closer to 0ms offset = better)
-        const absOffset   = Math.abs(offsetMs);
+        // ── Distance >= 2: Wrong Zone → Miss ─────────────────────────────────
+        if (dist >= 2) {
+            BASE.state.swing.quality = 'miss';
+            BASE.audio.playCatcherMitt();
+            BASE.core.announce(`Swing and a miss. Wrong zone. ${offsetLabel}.`);
+            BASE.core.updateBuffer(`MISS | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | OFFSET: ${Math.round(offsetMs)}ms`);
+            BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
+            BASE.core.onPitchResult({ quality: 'miss', distance: 0, zone: actualZone });
+            return;
+        }
+
+        // ── Distance 0: Exact Zone → Resolve Timing ──────────────────────────
+        const absOffset    = Math.abs(offsetMs);
         const contactStyle = BASE.state.swingStyle;
 
-        // Swing style modifiers
         const styleMap = {
             standard: { windowMs: 80,  powerMult: 1.0 },
-            choke_up:  { windowMs: 120, powerMult: 0.8 },
-            power:     { windowMs: 50,  powerMult: 1.3 },
+            choke_up: { windowMs: 120, powerMult: 0.8 },
+            power:    { windowMs: 50,  powerMult: 1.3 },
         };
         const style = styleMap[contactStyle] || styleMap.standard;
 
         let quality;
-        if (zoneMatch && absOffset <= style.windowMs * 0.25) {
+        if (absOffset <= style.windowMs * 0.25) {
             quality = 'homer';
-        } else if (zoneMatch && absOffset <= style.windowMs * 0.60) {
+        } else if (absOffset <= style.windowMs * 0.60) {
             quality = 'flush';
         } else if (absOffset <= style.windowMs) {
             quality = 'solid';
@@ -208,7 +244,6 @@ BASE.physics = {
 
         BASE.state.swing.quality = quality;
 
-        // Play impact tone
         const impactFn = {
             homer:  BASE.audio.playHomer,
             flush:  BASE.audio.playFlush,
@@ -217,20 +252,18 @@ BASE.physics = {
         };
         (impactFn[quality] || BASE.audio.playSolid)();
 
-        // Compute ball flight distance — powerRating scaling lives in _qualityToDistance
-        const baseDist  = BASE.physics._qualityToDistance(quality, BASE.state.player.powerRating);
-        const distance  = Math.round(baseDist * style.powerMult);
+        const baseDist = BASE.physics._qualityToDistance(quality, BASE.state.player.powerRating);
+        const distance = Math.round(baseDist * style.powerMult);
 
         BASE.state.setState(BASE.state.STATES.BALL_IN_FLIGHT);
 
-        // Announce for screen reader (S4)
-        const msg = `${quality.toUpperCase()} — ${distance} feet. ${BASE.physics._directionLabel(swingZone)}`;
+        // S4: Announce with raw offset telemetry
+        const msg = `${quality.toUpperCase()} — ${distance} feet. ${offsetLabel}. ${BASE.physics._directionLabel(swingZone)}`;
         BASE.core.announce(msg);
         BASE.core.updateBuffer(
             `SWING: Z${swingZone} vs Z${actualZone} | OFFSET: ${offsetMs > 0 ? '+' : ''}${Math.round(offsetMs)}ms | QUALITY: ${quality} | DIST: ${distance}ft`
         );
 
-        // Transition to result after brief pause
         setTimeout(() => {
             BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
             BASE.core.onPitchResult({ quality, distance, zone: actualZone });

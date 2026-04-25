@@ -1,63 +1,26 @@
 Semantic workspace search is not currently available
-Thinking: Looking at this bug, the issue is that after `_handleBoot` sets the state to `BATTER_UP`, the Space key handler checks if the state is `BATTER_UP` before launching a pitch — but the terminal focus might be getting stolen after boot, preventing the Space keydown event from reaching the handler. Let me trace through what happens when the init button is clicked versus when Space is pressed on it. Continuing to trace through the event flow...
-So when the user presses Space on the boot button, the keydown handler calls `preventDefault()` and triggers `_handleBoot()`. Inside that function, `BASE.input.init()` runs synchronously and registers a document-level keydown listener. Since the original Space keypress is still bubbling up through the DOM, that newly-registered listener catches the same event — and since the state is now BATTER_UP, it immediately calls `launchPitch()` with a random target zone.
-This means the pitch launches right at boot, transitioning state to WIND_UP. When the user presses Space again, the state is no longer BATTER_UP (it's progressed to WIND_UP or PITCH_IN_FLIGHT), so the input handler ignores it. That would explain why Space doesn't seem to work after the initial boot — the first pitch fires automatically during the boot sequence itself.
-But the user says swing style works fine with the +/- keys, which don't have state guards. And they're saying Space doesn't initiate a pitch at all. Let me reconsider the actual flow through `_handleKeyDown` — maybe there's something about the key filtering or the order of checks that's preventing Space from reaching the launch logic.
-Let me investigate by reading the current state of the key files.
-Read base_input.js
-Read base_core.js, lines 30 to 75
-Read index.html
-Thinking: I found the bug — it's a state machine mismatch in the `_handleBoot` function. The code is setting the state to `DERBY_SETUP`, but I thought I'd changed it to `BATTER_UP` in v1.1.3, so either that edit didn't actually get applied or I'm looking at an older version of the file.
-Looking back at the multi_replace response from v1.1.3, I see three string replacements failed, and I assumed those were for `launchPitch`, `_endDerby`, and `_resetDerby`. But checking the actual file now, `_endDerby` and `_resetDerby` are already updated with the new code, which means I must have retried those two individually after the batch operation failed. So the one replacement that actually failed and never got fixed is `_handleBoot` — that's why the announce text still says the old "Accessible Baseball v1.1.0" message instead of the new "Engine Ready" text.
-The root cause is clear now: `_handleBoot` is still setting the state to `DERBY_SETUP`, but the Spacebar handler expects `BATTER_UP` to trigger the pitch, so the input gets ignored. I need to apply that v1.1.3 Task 1 fix to `_handleBoot` now as v1.1.4 to resolve this.
-Found the bug. The v1.1.3 Task 1 edit to
-_handleBoot (c:\nbs\baseball\base_core.js:36)
-silently failed during the multi-replace (one of three failures I attributed elsewhere) and I never retried it. The file still sets state to
-DERBY_SETUP (c:\nbs\baseball\base_state.js:19)
-after boot, but the Space handler requires
-BATTER_UP (c:\nbs\baseball\base_state.js:20)
-— so Spacebar is rejected.
-Evidence: the announce text in
-base_core.js (/c:/nbs/baseball/base_core.js)
-line 56 still reads "Accessible Baseball v1.1.0…" and
-setState (c:\nbs\baseball\base_state.js:40)
-targets
-DERBY_SETUP (c:\nbs\baseball\base_state.js:19)
-. Swing-style cycling works because it has no state guard.
-Fixing as v1.1.4:
-Replacing 9 lines with 11 lines in base_core.js
+Thinking: Let me read the current state of base_physics.js to find the exact strings to replace.
+Read base_physics.js, lines 100 to 158
+Read base_physics.js, lines 80 to 220
+I have all the exact strings needed.
+Replacing 12 lines with 15 lines in base_physics.js
 ```
 ```
 ```
 ```
-Also bumping the title in
-index.html (/c:/nbs/baseball/index.html)
-so the version is consistent:
-Replacing 1 lines with 1 lines in index.html
-```
-```
-```
-```
-v1.1.4 — Spacebar Pitch Call Fix
-Root cause: a stale boot routine in
-base_core.js (/c:/nbs/baseball/base_core.js)
-_handleBoot() (c:\nbs\baseball\base_core.js:36)
-was setting state to
-DERBY_SETUP (c:\nbs\baseball\base_state.js:19)
-instead of
-BATTER_UP (c:\nbs\baseball\base_state.js:20)
-. The Space handler in
-base_input.js (/c:/nbs/baseball/base_input.js)
-whitelist-guards on
-BATTER_UP (c:\nbs\baseball\base_state.js:20)
-per S1, so it correctly rejected the keypress. Swing-style cycling (+/-) had no state guard, which is why it kept working — that confirmed the diagnosis.
-Fix: replaced
-setState(DERBY_SETUP) (c:\nbs\baseball\base_state.js:19)
-with
-setState(BATTER_UP) (c:\nbs\baseball\base_state.js:20)
-, plus the missing
-playStyleChange() (c:\nbs\baseball\base_audio.js:146)
-cue and the v1.1.3 announce/buffer strings. Also bumped the
-index.html (/c:/nbs/baseball/index.html)
-title to v1.1.4 for consistency.
-Reload the page and Space should now launch a pitch (Pitcher winding up… → Pitch! → Numpad 1–9 to swing).
+All three tasks applied in one pass. Changes in
+base_physics.js (/c:/nbs/baseball/base_physics.js)
+:
+**Header**: `v1.3.0` → `v1.3.1`
+**
+offsetLabel (c:\nbs\baseball\base_physics.js:197)
+**: Now returns &#39;perfect timing&#39; when
+|offsetMs| ≤ 2ms (c:\nbs\baseball\base_state.js:126)
+(accounts for rAF timing jitter), otherwise &quot;45ms late&quot; / &quot;45ms early&quot; as before
+**
+dist >= 2 (c:\nbs\baseball\base_physics.js:188)
+block**:
+BASE.audio.playCatcherMitt() (c:\nbs\baseball\base_state.js:6)
+fires before
+setState(RESULT_ANNOUNCE) (c:\nbs\baseball\base_state.js:25)
+— gives the batter the same audible "ball hit the mitt" feedback on a wrong-zone in-window swing as they get on a pitch that passes completely untouched

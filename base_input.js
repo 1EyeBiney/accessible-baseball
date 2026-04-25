@@ -32,8 +32,12 @@ BASE.input = {
         if (isSysKey) return;
 
         // ── Swing Style Cycle: NumpadAdd (+) and NumpadSubtract (-) ──────────
-        // Active from BATTER_UP through DERBY_SETUP; not limited to pitch only.
+        // S1 (v1.2.0): Guard — only allow style changes when there is no active
+        // pitch in flight. BATTER_UP = between pitches; WIND_UP = safe window.
         if (e.code === 'NumpadAdd' || e.code === 'NumpadSubtract') {
+            const styleOk = BASE.state.current === BASE.state.STATES.BATTER_UP ||
+                            BASE.state.current === BASE.state.STATES.WIND_UP;
+            if (!styleOk) return;
             e.preventDefault();
             BASE.input._cycleSwingStyle(e.code === 'NumpadAdd' ? 1 : -1);
             return;

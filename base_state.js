@@ -1,4 +1,4 @@
-/* base_state.js - v1.1.0 */
+/* base_state.js - v1.3.0 */
 
 // BASE namespace root — all runtime state lives here. Nothing else writes to
 // BASE.state.current directly; use BASE.state.setState() exclusively.
@@ -60,21 +60,22 @@ BASE.state = {
     },
     ZONE_PAN: {
         // Stereo pan per column (-1 = full left, 0 = center, 1 = full right)
-        left:   -0.7,
+        // v1.3.0: widened from ±0.7 to ±0.9 for broader stereo imaging
+        left:   -0.9,
         center:  0.0,
-        right:   0.7,
+        right:   0.9,
     },
     // Maps zone number (1–9) to { row, col, freq, pan }
     ZONES: {
-        1: { row: 'low',  col: 'left',   freq: 220, pan: -0.7 },
+        1: { row: 'low',  col: 'left',   freq: 220, pan: -0.9 },
         2: { row: 'low',  col: 'center', freq: 220, pan:  0.0 },
-        3: { row: 'low',  col: 'right',  freq: 220, pan:  0.7 },
-        4: { row: 'mid',  col: 'left',   freq: 440, pan: -0.7 },
+        3: { row: 'low',  col: 'right',  freq: 220, pan:  0.9 },
+        4: { row: 'mid',  col: 'left',   freq: 440, pan: -0.9 },
         5: { row: 'mid',  col: 'center', freq: 440, pan:  0.0 },
-        6: { row: 'mid',  col: 'right',  freq: 440, pan:  0.7 },
-        7: { row: 'high', col: 'left',   freq: 880, pan: -0.7 },
+        6: { row: 'mid',  col: 'right',  freq: 440, pan:  0.9 },
+        7: { row: 'high', col: 'left',   freq: 880, pan: -0.9 },
         8: { row: 'high', col: 'center', freq: 880, pan:  0.0 },
-        9: { row: 'high', col: 'right',  freq: 880, pan:  0.7 },
+        9: { row: 'high', col: 'right',  freq: 880, pan:  0.9 },
     },
 
     // ── Current Pitch ────────────────────────────────────────────────────────

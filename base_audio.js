@@ -1,4 +1,4 @@
-/* base_audio.js - v1.1.0 */
+/* base_audio.js - v1.3.0 */
 
 // S2: BASE namespace. S3: Web Audio API only for gameplay telemetry.
 
@@ -95,6 +95,13 @@ BASE.audio = {
         BASE.audio._playTone(180, 'triangle', 0.20, 0.5, 0.0);
     },
 
+    // ── Catcher's Mitt Thud (v1.2.0) ─────────────────────────────────────────
+    // Low square-wave thud fires the moment a pitch crosses the plate without
+    // a swing, giving the batter audible confirmation the ball has arrived.
+    playCatcherMitt() {
+        BASE.audio._playTone(100, 'square', 0.15, 0.4, 0.0);
+    },
+
     // ── Catcher's Target Hum (Pitch Telegraph) ────────────────────────────────
     // Plays a subtle zone-frequency hum during the pitcher's windup so the
     // batter's ears can orient before the pitch is released.
@@ -105,10 +112,10 @@ BASE.audio = {
         BASE.audio._playTone(zone.freq * 0.5, 'sine', 0.4, 0.15, zone.pan);
     },
 
-    // ── Pitch In-Flight Doppler Sweep ────────────────────────────────────────
-    // Simulates the ball approaching the batter.
-    // Frequency climbs and gain increases over the pitch duration.
-    // Called once per pitch from base_physics.js loop.
+    // ── Pitch In-Flight Doppler Sweep (v1.3.0) ───────────────────────────────
+    // Frequency and gain sweep toward the batter (Doppler approach).
+    // Pan ramps from centre (0.0) to the zone's final position.
+    // Mid/low zones add an LFO stutter cue to help orient pitch height.
     playPitchFlight(zoneNumber, durationMs) {
         const ctx  = BASE.audio.ctx;
         const zone = BASE.state.ZONES[zoneNumber];
@@ -116,13 +123,12 @@ BASE.audio = {
 
         const dur = durationMs / 1000;
 
-        const osc     = ctx.createOscillator();
+        const osc      = ctx.createOscillator();
         const gainNode = ctx.createGain();
-        const panner  = ctx.createStereoPanner();
+        const panner   = ctx.createStereoPanner();
 
         osc.type = 'sine';
-        // Start at half the zone's frequency, ramp up to the zone frequency as
-        // the ball arrives (Doppler-like approach effect).
+        // Doppler frequency ramp: starts low, climbs to zone freq as ball arrives
         osc.frequency.setValueAtTime(zone.freq * 0.4, ctx.currentTime);
         osc.frequency.linearRampToValueAtTime(zone.freq, ctx.currentTime + dur);
 
@@ -131,7 +137,9 @@ BASE.audio = {
         gainNode.gain.linearRampToValueAtTime(0.5, ctx.currentTime + dur * 0.85);
         gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
 
-        panner.pan.setValueAtTime(zone.pan, ctx.currentTime);
+        // v1.3.0: Pan ramps from 0.0 (centre at release) to zone.pan (at plate)
+        panner.pan.setValueAtTime(0.0, ctx.currentTime);
+        panner.pan.linearRampToValueAtTime(zone.pan, ctx.currentTime + dur);
 
         osc.connect(gainNode);
         gainNode.connect(panner);
@@ -139,6 +147,24 @@ BASE.audio = {
 
         osc.start(ctx.currentTime);
         osc.stop(ctx.currentTime + dur);
+
+        // v1.3.0: LFO stutter for mid and low zones — helps distinguish pitch height by ear
+        if (zone.row === 'mid' || zone.row === 'low') {
+            const lfoFreq = zone.row === 'mid' ? 15 : 8; // fast flutter vs slow throb
+            const lfo     = ctx.createOscillator();
+            const lfoGain = ctx.createGain();
+
+            lfo.type            = 'square';
+            lfo.frequency.value = lfoFreq;
+            // LFO depth: audible as texture without overwhelming the main tone
+            lfoGain.gain.value  = 0.08;
+
+            lfo.connect(lfoGain);
+            lfoGain.connect(gainNode.gain);
+
+            lfo.start(ctx.currentTime);
+            lfo.stop(ctx.currentTime + dur);
+        }
     },
 
     // ── Swing Style Change Blip ──────────────────────────────────────────────
