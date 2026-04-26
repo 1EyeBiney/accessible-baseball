@@ -1,4 +1,4 @@
-/* base_physics.js - v1.4.0 */
+/* base_physics.js - v1.5.0 */
 
 // S2: BASE namespace. Owns pitch trajectory math, contact quality resolution,
 // the pitch loop (including plate sync cue), and the "miss to Zone 5" command check.
@@ -38,31 +38,22 @@ BASE.physics = {
         return Math.round(1800 - (mph * 13));
     },
 
-    // ── Launch a Pitch (v1.1.3) ──────────────────────────────────────────────
+    // ── Launch a Pitch (v1.5.0) ──────────────────────────────────────────────
     // Two-phase entry:
-    //   Phase A (sync) — resolve mph + actualZone, store in state, set WIND_UP,
+    //   Phase A (sync) — resolve actualZone, store in state, set WIND_UP,
     //                    announce, play telegraph hum.
     //   Phase B (after random 1–2s windup timeout) — set PITCH_IN_FLIGHT, start
     //                    Doppler flight audio, begin the rAF loop.
+    // v1.5.0: Pitch duration is fixed at 750ms. Speed-to-duration math removed;
+    //         contact quality is now driven by reaction time in _resolveContact.
     launchPitch(targetZone, pitchType = 'fastball', speedMph = null) {
         // Resolve actual landing zone after pitcher command check
         const actualZone = BASE.physics.resolvePitchZone(targetZone);
-        // v1.3.0: mph is row-dependent when not provided.
-        // High row (7-9): 90-100mph hard heat  |  Mid row (4-6): 80-89mph  |  Low row (1-3): 70-79mph
-        let mph;
-        if (speedMph !== null) {
-            mph = speedMph;
-        } else {
-            const row = (BASE.state.ZONES[actualZone] || {}).row;
-            if (row === 'high') {
-                mph = 90 + Math.floor(Math.random() * 11);  // 90–100
-            } else if (row === 'mid') {
-                mph = 80 + Math.floor(Math.random() * 10);  // 80–89
-            } else {
-                mph = 70 + Math.floor(Math.random() * 10);  // 70–79 (low)
-            }
-        }
-        const durationMs = BASE.physics.speedToDurationMs(mph);
+
+        // v1.5.0: Hardcoded fixed-duration pitch loop (750ms)
+        const durationMs = 750;
+        // speedMph kept as a dummy display value for telemetry strings
+        const mph = (speedMph !== null) ? speedMph : 75;
 
         // Write into shared state (timing fields filled in Phase B)
         BASE.state.pitch.targetZone     = targetZone;
@@ -132,30 +123,14 @@ BASE.physics = {
             BASE.audio.playPlateSync();
         }
 
-        // ── Style-Aware Contact Window: Check if batter already swung (v1.1.2) ──
-        // (Swing is registered in base_input.js; we check it here on each frame.)
-        const _win = BASE.physics.STYLE_WINDOWS[BASE.state.swingStyle] ||
-                     BASE.physics.STYLE_WINDOWS.standard;
-        if (BASE.state.swing.zonePressed !== null &&
-            BASE.state.swing.progressAtSwing >= _win.lo &&
-            BASE.state.swing.progressAtSwing <= _win.hi &&
-            BASE.state.swing.quality === null) {
-            // Swing landed in the contact window — play thwack, resolve contact
-            BASE.audio.playThwack();
-            BASE.physics._resolveContact(actualZone);
-            return; // Loop ends — contact was made
-        }
-
-        // ── Pitch Complete ────────────────────────────────────────────────────
+        // ── Pitch Complete (v1.5.0) ──────────────────────────────────────────
+        // No early-contact resolution; the loop only resolves at progress >= 1.0.
+        // Quality is reaction-time based, computed in _resolveContact.
         if (progress >= 1.0) {
             BASE.state.pitch.inFlight = false;
-            BASE.audio.playCatcherMitt(); // v1.2.0: audible catch before resolution
-
             if (BASE.state.swing.zonePressed !== null) {
-                // Batter swung but outside the contact window (too early or too late)
-                BASE.physics._resolveSwingAndMiss();
+                BASE.physics._resolveContact(actualZone);
             } else {
-                // No swing — umpire call
                 BASE.physics._resolveNoPitch(actualZone);
             }
             return;
@@ -168,22 +143,20 @@ BASE.physics = {
             );
     },
 
-    // ── Contact Resolution (v1.2.0) ──────────────────────────────────────────
-    // Called when swing zone + timing both fall within the contact window.
-    // Zone quality is determined by Manhattan distance on the 3×3 numpad grid.
+    // ── Contact Resolution (v1.5.0) ──────────────────────────────────────────
+    // Called when the pitch completes and the batter swung. Zone correctness
+    // is judged by Manhattan distance on the 3×3 numpad grid; on a direct
+    // hit (dist === 0) contact quality is driven by raw reaction time from
+    // pitch release (BASE.state.pitch.startTime).
     _resolveContact(actualZone) {
         BASE.state.pitch.inFlight = false;
         BASE.physics._pitchLoopToken++; // invalidate any residual loop frame
 
-        const swingZone = BASE.state.swing.zonePressed;
-        const offsetMs  = BASE.state.swing.pressTime - BASE.state.pitch.plateArrivalTime;
-        BASE.state.swing.offsetMs = offsetMs;
+        const swingZone   = BASE.state.swing.zonePressed;
+        const reactionMs  = BASE.state.swing.pressTime - BASE.state.pitch.startTime;
+        const reactionTxt = `Reaction: ${Math.round(reactionMs)}ms`;
 
         // ── Manhattan Distance on 3×3 Numpad Grid ────────────────────────────
-        // Grid coords (col, row), origin bottom-left:
-        //   7(0,2) 8(1,2) 9(2,2)
-        //   4(0,1) 5(1,1) 6(2,1)
-        //   1(0,0) 2(1,0) 3(2,0)
         const ZONE_COORDS = {
             1:[0,0], 2:[1,0], 3:[2,0],
             4:[0,1], 5:[1,1], 6:[2,1],
@@ -193,20 +166,15 @@ BASE.physics = {
         const [ax, ay] = ZONE_COORDS[actualZone] || [0, 0];
         const dist     = Math.abs(sx - ax) + Math.abs(sy - ay);
 
-        // Human-readable offset telemetry included in every announcement (S4)
-        const offsetLabel = Math.abs(offsetMs) <= 2
-            ? 'perfect timing'
-            : Math.abs(Math.round(offsetMs)) + 'ms ' + (offsetMs > 0 ? 'late' : 'early');
-
         // ── Distance 1: Adjacent Zone → Foul ─────────────────────────────────
         if (dist === 1) {
             BASE.state.swing.quality = 'foul';
             BASE.audio.playTopped();
-            BASE.core.announce(`Foul. Clipped it. ${offsetLabel}.`);
-            BASE.core.updateBuffer(`FOUL | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | OFFSET: ${Math.round(offsetMs)}ms`);
-            BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Offset ${Math.round(offsetMs)}ms. Result: foul.`);
+            BASE.core.announce(`Foul. Clipped it. ${reactionTxt}.`);
+            BASE.core.updateBuffer(`FOUL | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | ${reactionTxt}`);
+            BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Reaction ${Math.round(reactionMs)}ms. Result: foul.`);
             BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
-            BASE.core.onPitchResult({ quality: 'foul', distance: 0, zone: actualZone });
+            BASE.core.onPitchResult({ quality: 'foul', distance: 0, zone: actualZone, reactionMs });
             return;
         }
 
@@ -214,37 +182,31 @@ BASE.physics = {
         if (dist >= 2) {
             BASE.state.swing.quality = 'miss';
             BASE.audio.playCatcherMitt();
-            BASE.core.announce(`Swing and a miss. Wrong zone. ${offsetLabel}.`);
-            BASE.core.updateBuffer(`MISS | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | OFFSET: ${Math.round(offsetMs)}ms`);
-            BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Offset ${Math.round(offsetMs)}ms. Result: miss.`);
+            BASE.core.announce(`Swing and a miss. Wrong zone. ${reactionTxt}.`);
+            BASE.core.updateBuffer(`MISS | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | ${reactionTxt}`);
+            BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Reaction ${Math.round(reactionMs)}ms. Result: miss.`);
             BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
-            BASE.core.onPitchResult({ quality: 'miss', distance: 0, zone: actualZone });
+            BASE.core.onPitchResult({ quality: 'miss', distance: 0, zone: actualZone, reactionMs });
             return;
         }
 
-        // ── Distance 0: Exact Zone → Resolve Timing ──────────────────────────
-        const absOffset    = Math.abs(offsetMs);
-        const contactStyle = BASE.state.swingStyle;
-
-        const styleMap = {
-            standard: { windowMs: 80,  powerMult: 1.0 },
-            choke_up: { windowMs: 120, powerMult: 0.8 },
-            power:    { windowMs: 50,  powerMult: 1.3 },
-        };
-        const style = styleMap[contactStyle] || styleMap.standard;
-
+        // ── Distance 0: Exact Zone → Reaction-Time Quality (v1.5.0) ──────────
         let quality;
-        if (absOffset <= style.windowMs * 0.25) {
+        if (reactionMs <= 300) {
             quality = 'homer';
-        } else if (absOffset <= style.windowMs * 0.60) {
+        } else if (reactionMs <= 450) {
             quality = 'flush';
-        } else if (absOffset <= style.windowMs) {
+        } else if (reactionMs <= 600) {
             quality = 'solid';
         } else {
             quality = 'topped';
         }
 
         BASE.state.swing.quality = quality;
+
+        // v1.5.0: Thwack fires immediately before the impact tone so the hit
+        // lands punchy at the exact moment the ball crosses the plate.
+        BASE.audio.playThwack();
 
         const impactFn = {
             homer:  BASE.audio.playHomer,
@@ -254,24 +216,23 @@ BASE.physics = {
         };
         (impactFn[quality] || BASE.audio.playSolid)();
 
-        const baseDist = BASE.physics._qualityToDistance(quality, BASE.state.player.powerRating);
-        const distance = Math.round(baseDist * style.powerMult);
+        const distance = BASE.physics._qualityToDistance(quality, BASE.state.player.powerRating);
 
         BASE.state.setState(BASE.state.STATES.BALL_IN_FLIGHT);
 
-        // S4: Announce with raw offset telemetry
-        const msg = `${quality.toUpperCase()} — ${distance} feet. ${offsetLabel}. ${BASE.physics._directionLabel(swingZone)}`;
+        // S4: Announce with reaction telemetry
+        const msg = `${quality.toUpperCase()} — ${distance} feet. ${reactionTxt}. ${BASE.physics._directionLabel(swingZone)}`;
         BASE.core.announce(msg);
         BASE.core.updateBuffer(
-            `SWING: Z${swingZone} vs Z${actualZone} | OFFSET: ${offsetMs > 0 ? '+' : ''}${Math.round(offsetMs)}ms | QUALITY: ${quality} | DIST: ${distance}ft`
+            `SWING: Z${swingZone} vs Z${actualZone} | ${reactionTxt} | QUALITY: ${quality} | DIST: ${distance}ft`
         );
 
-        // v1.4.0: Record to derby history log before handing off to result handler
-        BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Offset ${Math.round(offsetMs)}ms. Result: ${quality}.`);
+        // Record to derby history log before handing off to result handler
+        BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Reaction ${Math.round(reactionMs)}ms. Result: ${quality}.`);
 
         setTimeout(() => {
             BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
-            BASE.core.onPitchResult({ quality, distance, zone: actualZone });
+            BASE.core.onPitchResult({ quality, distance, zone: actualZone, reactionMs });
         }, 1200);
     },
 

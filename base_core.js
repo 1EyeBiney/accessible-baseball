@@ -1,4 +1,4 @@
-/* base_core.js - v1.4.4 */
+/* base_core.js - v1.5.0 */
 
 // S2: BASE namespace. Owns boot sequence, focus management, ARIA announcer,
 // visual buffer updater, and the pitch/result event callbacks that tie all
@@ -157,11 +157,12 @@ BASE.core = {
         }
     },
 
-    // ── Pitch Result Handler (v1.1.3) ────────────────────────────────────────
+    // ── Pitch Result Handler (v1.5.0) ────────────────────────────────────────
     // Called by base_physics.js when a pitch resolves (hit, miss, or called).
     // Updates Derby tallies, announces the running score, then 3s auto-advance.
+    // v1.5.0: result may include reactionMs for telemetry display.
     onPitchResult(result) {
-        const { quality, distance } = result;
+        const { quality, distance, reactionMs } = result;
 
         // ── Derby Tallies ─────────────────────────────────────────────────────
         BASE.state.derby.pitchesRemaining--;
@@ -202,8 +203,9 @@ BASE.core = {
         const scoreText = `You have ${homers} ${hPlural} and ${remaining} ${pPlural} remaining.`;
         // Slight delay so the impact tone breathes before the score is read
         setTimeout(() => BASE.core.announce(`${resultText} ${scoreText}`), 300);
+        const rxLine = (typeof reactionMs === 'number') ? `\nREACTION: ${Math.round(reactionMs)}ms` : '';
         BASE.core.updateBuffer(
-            `DERBY | HR: ${homers} | HITS: ${BASE.state.derby.hits} | OUTS: ${BASE.state.derby.outs} | PITCHES LEFT: ${remaining}`
+            `DERBY | HR: ${homers} | HITS: ${BASE.state.derby.hits} | OUTS: ${BASE.state.derby.outs} | PITCHES LEFT: ${remaining}${rxLine}`
         );
 
         // ── Auto-Advance Timer (3s) ───────────────────────────────────────────

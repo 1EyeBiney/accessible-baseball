@@ -1,4 +1,4 @@
-/* base_input.js - v1.4.3 */
+/* base_input.js - v1.5.0 */
 
 // S2: BASE namespace.
 // S1: Whitelist state guards — swing keys are ONLY active in PITCH_IN_FLIGHT.
@@ -122,6 +122,9 @@ BASE.input = {
         BASE.state.swing.zonePressed     = zone;
         BASE.state.swing.pressTime       = now;
         BASE.state.swing.progressAtSwing = progress;
+
+        // v1.5.0: Audible confirmation that the swing keypress was registered.
+        BASE.audio.playSwingLock();
 
         // The physics loop will detect this on its next frame and resolve contact.
         // If the swing is outside 85–95%, the loop will handle the miss on completion.
