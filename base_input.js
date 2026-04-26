@@ -1,4 +1,4 @@
-/* base_input.js - v1.5.0 */
+/* base_input.js - v1.6.1 */
 
 // S2: BASE namespace.
 // S1: Whitelist state guards — swing keys are ONLY active in PITCH_IN_FLIGHT.
@@ -10,7 +10,6 @@ BASE.input = {
     NUMPAD_ZONE_MAP: {
         'Numpad1': 1, 'Numpad2': 2, 'Numpad3': 3,
         'Numpad4': 4, 'Numpad5': 5, 'Numpad6': 6,
-        'Numpad7': 7, 'Numpad8': 8, 'Numpad9': 9,
     },
 
     init() {
@@ -102,7 +101,7 @@ BASE.input = {
         if (e.code === 'Space') {
             if (BASE.state.current !== BASE.state.STATES.BATTER_UP) return;
             e.preventDefault();
-            const randomTargetZone = Math.ceil(Math.random() * 9);
+            const randomTargetZone = Math.ceil(Math.random() * 6);
             BASE.physics.launchPitch(randomTargetZone);
             return;
         }

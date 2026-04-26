@@ -1,4 +1,4 @@
-/* base_physics.js - v1.6.0 */
+/* base_physics.js - v1.7.0 */
 
 // S2: BASE namespace. Owns pitch trajectory math, contact quality resolution,
 // the pitch loop (including plate sync cue), and the "miss to Zone 5" command check.
@@ -63,6 +63,8 @@ BASE.physics = {
         BASE.state.pitch.durationMs     = durationMs;
         BASE.state.pitch.plateSyncFired = false;
         BASE.state.pitch.inFlight       = false;
+        BASE.state.pitch.mittFired      = false;
+        BASE.state.pitch.resolved       = false;
 
         // Clear any previous swing data
         BASE.state.swing.zonePressed     = null;
@@ -98,20 +100,20 @@ BASE.physics = {
         }, windupMs);
     },
 
-    // ── Pitch Loop ────────────────────────────────────────────────────────────
-    // Runs on requestAnimationFrame. Tracks progress 0.0–1.0.
+    // ── Pitch Loop (v1.7.0) ───────────────────────────────────────────────────
+    // Runs on requestAnimationFrame. Tracks progress 0.0–2.0 (timeout at 2×).
     // At 90% → fires playPlateSync() once.
-    // At 100% → pitch is over; resolves as strike or ball.
+    // At 100% → fires playCatcherMitt() once (mittFired guard).
+    // Swing resolution happens as soon as zonePressed is set (resolved guard).
+    // Timeout at 200% → resolves as no-swing called strike.
     _runPitchLoop(token, startTime, durationMs, actualZone) {
         if (token !== BASE.physics._pitchLoopToken) return; // S2 token guard
 
         const now      = performance.now();
         const elapsed  = now - startTime;
-        const progress = Math.min(elapsed / durationMs, 1.0);
+        const progress = elapsed / durationMs; // NOT capped — loop runs past 1.0
 
         // ── First-frame Telemetry (v1.1.1) ────────────────────────────────────
-        // Fires only on the first rAF tick (elapsed < 50ms) to satisfy rules.md
-        // Telemetry requirement without hammering the DOM every frame.
         if (elapsed < 50) {
             document.getElementById('visual-buffer').innerText =
                 `PITCH | ${BASE.state.pitch.speedMph} mph | Zone ${actualZone}`;
@@ -123,16 +125,24 @@ BASE.physics = {
             BASE.audio.playPlateSync();
         }
 
-        // ── Pitch Complete (v1.5.0) ──────────────────────────────────────────
-        // No early-contact resolution; the loop only resolves at progress >= 1.0.
-        // Quality is reaction-time based, computed in _resolveContact.
-        if (progress >= 1.0) {
-            BASE.state.pitch.inFlight = false;
-            if (BASE.state.swing.zonePressed !== null) {
-                BASE.physics._resolveContact(actualZone);
-            } else {
-                BASE.physics._resolveNoPitch(actualZone);
-            }
+        // ── 100% Gate: Catcher Mitt Thud ─────────────────────────────────────
+        if (progress >= 1.0 && !BASE.state.pitch.mittFired) {
+            BASE.state.pitch.mittFired = true;
+            BASE.audio.playCatcherMitt();
+        }
+
+        // ── Swing Check ───────────────────────────────────────────────────────
+        if (BASE.state.swing.zonePressed !== null && !BASE.state.pitch.resolved) {
+            BASE.state.pitch.resolved = true;
+            BASE.physics._resolveContact(actualZone);
+            return;
+        }
+
+        // ── Timeout Check (2× flight duration) ───────────────────────────────
+        if (progress >= 2.0 && !BASE.state.pitch.resolved) {
+            BASE.state.pitch.resolved   = true;
+            BASE.state.pitch.inFlight   = false;
+            BASE.physics._resolveNoPitch(actualZone);
             return;
         }
 
@@ -155,6 +165,19 @@ BASE.physics = {
         const swingZone   = BASE.state.swing.zonePressed;
         const reactionMs  = BASE.state.swing.pressTime - BASE.state.pitch.startTime;
         const reactionTxt = `Reaction: ${Math.round(reactionMs)}ms`;
+
+        // ── Late Swing Gate (v1.7.0) ──────────────────────────────────────────
+        // Swing registered after the ball passed the plate (reactionMs > 750).
+        // Mitt may have already fired; no contact possible.
+        if (reactionMs > 750) {
+            BASE.state.swing.quality = 'miss';
+            BASE.core.announce(`Swing and a miss. Late swing. ${reactionTxt}.`);
+            BASE.core.updateBuffer(`MISS LATE | Z${swingZone} vs Z${actualZone} | ${reactionTxt}`);
+            BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Reaction ${Math.round(reactionMs)}ms. Result: miss_late.`);
+            BASE.state.setState(BASE.state.STATES.RESULT_ANNOUNCE);
+            BASE.core.onPitchResult({ quality: 'miss', distance: 0, zone: actualZone, reactionMs });
+            return;
+        }
 
         // ── Manhattan Distance on 3×3 Numpad Grid ────────────────────────────
         const ZONE_COORDS = {
@@ -181,7 +204,6 @@ BASE.physics = {
         // ── Distance >= 2: Wrong Zone → Miss ─────────────────────────────────
         if (dist >= 2) {
             BASE.state.swing.quality = 'miss';
-            BASE.audio.playCatcherMitt();
             BASE.core.announce(`Swing and a miss. Wrong zone. ${reactionTxt}.`);
             BASE.core.updateBuffer(`MISS | SWING Z${swingZone} vs PITCH Z${actualZone} | DIST: ${dist} | ${reactionTxt}`);
             BASE.state.derby.history.push(`Pitch: Target Z${BASE.state.pitch.targetZone}, Actual Z${actualZone}, ${BASE.state.pitch.speedMph}mph. Swing Z${swingZone}. Reaction ${Math.round(reactionMs)}ms. Result: miss.`);

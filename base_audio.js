@@ -1,4 +1,4 @@
-/* base_audio.js - v1.6.0 */
+/* base_audio.js - v1.6.1 */
 
 // S2: BASE namespace. S3: Web Audio API only for gameplay telemetry.
 
@@ -135,22 +135,16 @@ BASE.audio = {
 
         // Per-zone frequency and pan endpoints
         let pF, eF, sP, eP;
-        if (zoneNumber === 5) {
-            pF = 800;  eF = 800;  sP =  0.00; eP =  0.00;
-        } else if (zoneNumber === 4) {
-            pF = 800;  eF = 800;  sP = -0.85; eP = -0.85;
-        } else if (zoneNumber === 6) {
-            pF = 800;  eF = 800;  sP =  0.85; eP =  0.85;
-        } else if (zoneNumber === 2) {
-            pF = 800;  eF = 250;  sP =  0.00; eP =  0.00;
-        } else if (zoneNumber === 1) {
-            pF = 600;  eF = 450;  sP = -0.85; eP = -0.85;
-        } else if (zoneNumber === 3) {
-            pF = 600;  eF = 450;  sP =  0.85; eP =  0.85;
+        if (zoneNumber >= 4 && zoneNumber <= 6) {
+            pF = 1200; eF = 1200;
+            sP = (zoneNumber === 4 ? -0.85 : (zoneNumber === 6 ? 0.85 : 0.0));
+            eP = sP;
+        } else if (zoneNumber >= 1 && zoneNumber <= 3) {
+            pF = 600; eF = 200;
+            sP = (zoneNumber === 1 ? -0.85 : (zoneNumber === 3 ? 0.85 : 0.0));
+            eP = sP;
         } else {
-            // High zones (7, 8, 9)
-            const zonePan = BASE.state.ZONES[zoneNumber] ? BASE.state.ZONES[zoneNumber].pan : 0;
-            pF = 1000; eF = 1000; sP = zonePan; eP = zonePan;
+            return; // Failsafe for invalid zones
         }
 
         // Pre-schedule tone pulses along the Web Audio timeline

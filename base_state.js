@@ -1,4 +1,4 @@
-/* base_state.js - v1.4.1 */
+/* base_state.js - v1.6.1 */
 
 // BASE namespace root — all runtime state lives here. Nothing else writes to
 // BASE.state.current directly; use BASE.state.setState() exclusively.
@@ -73,9 +73,6 @@ BASE.state = {
         4: { row: 'mid',  col: 'left',   freq: 440, pan: -0.9 },
         5: { row: 'mid',  col: 'center', freq: 440, pan:  0.0 },
         6: { row: 'mid',  col: 'right',  freq: 440, pan:  0.9 },
-        7: { row: 'high', col: 'left',   freq: 880, pan: -0.9 },
-        8: { row: 'high', col: 'center', freq: 880, pan:  0.0 },
-        9: { row: 'high', col: 'right',  freq: 880, pan:  0.9 },
     },
 
     // ── Current Pitch ────────────────────────────────────────────────────────

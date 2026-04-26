@@ -1,4 +1,4 @@
-/* base_core.js - v1.5.0 */
+/* base_core.js - v1.6.1 */
 
 // S2: BASE namespace. Owns boot sequence, focus management, ARIA announcer,
 // visual buffer updater, and the pitch/result event callbacks that tie all
@@ -141,7 +141,7 @@ BASE.core = {
             BASE.state.setState(BASE.state.STATES.BATTER_UP);
 
             // Derby: pick a random target zone and pitch type for Phase 1
-            const targetZone = Math.ceil(Math.random() * 9);
+            const targetZone = Math.ceil(Math.random() * 6);
             const speedMph   = 85 + Math.floor(Math.random() * 16); // 85–100mph
 
             BASE.core.announce('Pitcher winds up…');
