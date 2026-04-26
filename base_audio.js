@@ -1,4 +1,4 @@
-/* base_audio.js - v1.5.0 */
+/* base_audio.js - v1.6.0 */
 
 // S2: BASE namespace. S3: Web Audio API only for gameplay telemetry.
 
@@ -16,33 +16,36 @@ BASE.audio = {
 
     // ── Internal Tone Builder ─────────────────────────────────────────────────
     // Plays a single oscillator tone with optional stereo pan.
-    // freq     : Hz
-    // type     : OscillatorType ('sine', 'square', 'sawtooth', 'triangle')
-    // duration : seconds
-    // gain     : 0.0–1.0
-    // pan      : -1.0 (left) to 1.0 (right)
-    _playTone(freq, type, duration, gain = 0.5, pan = 0.0) {
+    // freq      : Hz
+    // type      : OscillatorType ('sine', 'square', 'sawtooth', 'triangle')
+    // duration  : seconds
+    // gain      : 0.0–1.0
+    // pan       : -1.0 (left) to 1.0 (right)
+    // startTime : AudioContext time to schedule the note (null = now)
+    _playTone(freq, type, duration, gain = 0.5, pan = 0.0, startTime = null) {
         const ctx = BASE.audio.ctx;
         if (!ctx) return;
 
-        const osc     = ctx.createOscillator();
+        const t = startTime !== null ? startTime : ctx.currentTime;
+
+        const osc      = ctx.createOscillator();
         const gainNode = ctx.createGain();
-        const panner  = ctx.createStereoPanner();
+        const panner   = ctx.createStereoPanner();
 
-        osc.type      = type;
-        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, t);
 
-        gainNode.gain.setValueAtTime(gain, ctx.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+        gainNode.gain.setValueAtTime(gain, t);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
-        panner.pan.setValueAtTime(pan, ctx.currentTime);
+        panner.pan.setValueAtTime(pan, t);
 
         osc.connect(gainNode);
         gainNode.connect(panner);
         panner.connect(ctx.destination);
 
-        osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + duration);
+        osc.start(t);
+        osc.stop(t + duration);
     },
     // ── Swing Lock (v1.5.0) ────────────────────────────────────────────
     // Brief sharp UI confirmation that the swing keypress was registered.
@@ -117,50 +120,54 @@ BASE.audio = {
     },
 
     // ── Pitch In-Flight Doppler Sweep (v1.3.0) ───────────────────────────────
-    // Frequency and gain sweep toward the batter (Doppler approach).
-    // Pan ramps from zone.pan*0.4 (release hint) to zone.pan (at plate).
-    // v1.5.0: Oscillator timbre encodes pitch height instead of LFO stutter:
-    //   high = triangle (bright), mid = sine (smooth), low = sawtooth (gritty).
+    // ── Pitch In-Flight Stepped Tone Sweep (v1.6.0) ──────────────────────────
+    // Pre-schedules a series of short triangle tones via the Web Audio clock,
+    // interpolating frequency, pan, and gain across the pitch duration.
+    // Zone-specific start/end frequency and pan encode ball position semantics:
+    //   Mid row  (2,4,5,6) : freq drops toward plate (approaching sound)
+    //   Low row  (1,2,3)   : mid-range freq, directional pan
+    //   High row (7,8,9)   : constant high freq, directional pan
     playPitchFlight(zoneNumber, durationMs) {
-        const ctx  = BASE.audio.ctx;
-        const zone = BASE.state.ZONES[zoneNumber];
-        if (!ctx || !zone) return;
+        const ctx = BASE.audio.ctx;
+        if (!ctx) return;
 
         const dur = durationMs / 1000;
 
-        const osc      = ctx.createOscillator();
-        const gainNode = ctx.createGain();
-        const panner   = ctx.createStereoPanner();
-
-        // v1.5.0: Timbre by row
-        if (zone.row === 'high') {
-            osc.type = 'triangle';
-        } else if (zone.row === 'low') {
-            osc.type = 'sawtooth';
+        // Per-zone frequency and pan endpoints
+        let pF, eF, sP, eP;
+        if (zoneNumber === 5) {
+            pF = 800;  eF = 800;  sP =  0.00; eP =  0.00;
+        } else if (zoneNumber === 4) {
+            pF = 800;  eF = 800;  sP = -0.85; eP = -0.85;
+        } else if (zoneNumber === 6) {
+            pF = 800;  eF = 800;  sP =  0.85; eP =  0.85;
+        } else if (zoneNumber === 2) {
+            pF = 800;  eF = 250;  sP =  0.00; eP =  0.00;
+        } else if (zoneNumber === 1) {
+            pF = 600;  eF = 450;  sP = -0.85; eP = -0.85;
+        } else if (zoneNumber === 3) {
+            pF = 600;  eF = 450;  sP =  0.85; eP =  0.85;
         } else {
-            osc.type = 'sine';
+            // High zones (7, 8, 9)
+            const zonePan = BASE.state.ZONES[zoneNumber] ? BASE.state.ZONES[zoneNumber].pan : 0;
+            pF = 1000; eF = 1000; sP = zonePan; eP = zonePan;
         }
 
-        // Doppler frequency ramp: starts low, climbs to zone freq as ball arrives
-        osc.frequency.setValueAtTime(zone.freq * 0.4, ctx.currentTime);
-        osc.frequency.linearRampToValueAtTime(zone.freq, ctx.currentTime + dur);
+        // Pre-schedule tone pulses along the Web Audio timeline
+        let t        = ctx.currentTime;
+        let progress = 0;
 
-        // Gain rises as ball approaches (far → near)
-        gainNode.gain.setValueAtTime(0.05, ctx.currentTime);
-        gainNode.gain.linearRampToValueAtTime(0.5, ctx.currentTime + dur * 0.85);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+        while (progress < 1.0) {
+            const delayMs = 40 - (progress * 20);           // 40ms → 20ms (speeds up)
+            const f       = pF + (progress * (eF - pF));   // freq interpolation
+            const p       = sP + (progress * (eP - sP));   // pan interpolation
+            const v       = 0.1 + (progress * 0.4);        // gain 0.1 → 0.5
 
-        // Pan starts at 40% of zone.pan (hints at trajectory from release)
-        // then ramps to the full zone position as the ball arrives at the plate.
-        panner.pan.setValueAtTime(zone.pan * 0.4, ctx.currentTime);
-        panner.pan.linearRampToValueAtTime(zone.pan, ctx.currentTime + dur);
+            BASE.audio._playTone(f, 'triangle', 0.1, v, p, t);
 
-        osc.connect(gainNode);
-        gainNode.connect(panner);
-        panner.connect(ctx.destination);
-
-        osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + dur);
+            t        += delayMs / 1000;
+            progress  = (t - ctx.currentTime) / dur;
+        }
     },
 
     // ── Swing Style Change Blip ──────────────────────────────────────────────

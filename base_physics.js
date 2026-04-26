@@ -1,4 +1,4 @@
-/* base_physics.js - v1.5.0 */
+/* base_physics.js - v1.6.0 */
 
 // S2: BASE namespace. Owns pitch trajectory math, contact quality resolution,
 // the pitch loop (including plate sync cue), and the "miss to Zone 5" command check.
@@ -74,7 +74,7 @@ BASE.physics = {
         // ── Phase A: Wind Up ──────────────────────────────────────────────────
         BASE.state.setState(BASE.state.STATES.WIND_UP);
         BASE.core.announce('Pitcher winding up...');
-        BASE.audio.playTargetHum(actualZone); // pre-pitch orientation cue
+        // v1.6.0: Target hum removed — pitch flight audio is now the sole directional cue.
 
         // Random windup duration: 1000–2000ms
         const windupMs = 1000 + Math.floor(Math.random() * 1001);
@@ -190,13 +190,13 @@ BASE.physics = {
             return;
         }
 
-        // ── Distance 0: Exact Zone → Reaction-Time Quality (v1.5.0) ──────────
+        // ── Distance 0: Exact Zone → Reaction-Time Quality (v1.6.0) ──────────
         let quality;
-        if (reactionMs <= 300) {
+        if (reactionMs <= 550) {
             quality = 'homer';
-        } else if (reactionMs <= 450) {
+        } else if (reactionMs <= 650) {
             quality = 'flush';
-        } else if (reactionMs <= 600) {
+        } else if (reactionMs <= 750) {
             quality = 'solid';
         } else {
             quality = 'topped';
